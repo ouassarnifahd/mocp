@@ -1,34 +1,90 @@
+/*
+ * The purpose of this header is to provide common functions and macros
+ * used throughout MOC code.  It also provides (x-prefixed) functions
+ * which augment or adapt their respective system functions with error
+ * checking and the like.
+ */
+
 #ifndef COMMON_H
 #define COMMON_H
 
 #include <stdlib.h>
 #include <stdarg.h>
-#include <ctype.h>
+#include <stdbool.h>
+#include <limits.h>
 
-#ifdef __cplusplus
-extern "C" {
+#include "compat.h"
+
+/* Suppress overly-enthusiastic GNU variadic macro extensions warning. */
+#if defined(__clang__) && HAVE_VARIADIC_MACRO_WARNING
+# pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#endif
+
+struct timespec;
+
+#ifdef HAVE_FUNC_ATTRIBUTE_FORMAT
+# define ATTR_PRINTF(x,y) __attribute__ ((format (printf, x, y)))
+#else
+# define ATTR_PRINTF(...)
+#endif
+
+#ifdef HAVE_FUNC_ATTRIBUTE_NORETURN
+# define ATTR_NORETURN __attribute__((noreturn))
+#else
+# define ATTR_NORETURN
+#endif
+
+#ifdef HAVE_VAR_ATTRIBUTE_UNUSED
+# define ATTR_UNUSED __attribute__((unused))
+#else
+# define ATTR_UNUSED
+#endif
+
+#ifndef GCC_VERSION
+#define GCC_VERSION (__GNUC__ * 10000 + \
+                     __GNUC_MINOR__ * 100 + \
+                     __GNUC_PATCHLEVEL__)
+#endif
+
+/* These macros allow us to use the appropriate method for manipulating
+ * GCC's diagnostic pragmas depending on the compiler's version. */
+#if GCC_VERSION >= 40200
+# define GCC_DIAG_STR(s) #s
+# define GCC_DIAG_JOINSTR(x,y) GCC_DIAG_STR(x ## y)
+# define GCC_DIAG_DO_PRAGMA(x) _Pragma (#x)
+# define GCC_DIAG_PRAGMA(x) GCC_DIAG_DO_PRAGMA(GCC diagnostic x)
+# if GCC_VERSION >= 40600
+#  define GCC_DIAG_OFF(x) GCC_DIAG_PRAGMA(push) \
+                          GCC_DIAG_PRAGMA(ignored GCC_DIAG_JOINSTR(-W,x))
+#  define GCC_DIAG_ON(x)  GCC_DIAG_PRAGMA(pop)
+# else
+#  define GCC_DIAG_OFF(x) GCC_DIAG_PRAGMA(ignored GCC_DIAG_JOINSTR(-W,x))
+#  define GCC_DIAG_ON(x)  GCC_DIAG_PRAGMA(warning GCC_DIAG_JOINSTR(-W,x))
+# endif
+#else
+# define GCC_DIAG_OFF(x)
+# define GCC_DIAG_ON(x)
+#endif
+
+#ifdef HAVE_FORMAT_TRUNCATION_WARNING
+# define SUPPRESS_FORMAT_TRUNCATION_WARNING GCC_DIAG_OFF(format-truncation)
+# define UNSUPPRESS_FORMAT_TRUNCATION_WARNING GCC_DIAG_ON(format-truncation)
+#else
+# define SUPPRESS_FORMAT_TRUNCATION_WARNING
+# define UNSUPPRESS_FORMAT_TRUNCATION_WARNING
 #endif
 
 #define CONFIG_DIR      ".moc"
+#define LOCK(mutex)     pthread_mutex_lock (&mutex)
+#define UNLOCK(mutex)   pthread_mutex_unlock (&mutex)
+#define ARRAY_SIZE(x)   (sizeof(x)/sizeof(x[0]))
+#define ssizeof(x)      ((ssize_t) sizeof(x))
 
 /* Maximal string length sent/received. */
 #define MAX_SEND_STRING	4096
 
-/* Maximum path length, we don't consider exceptions like mounted NFS */
-#ifndef PATH_MAX
-# if defined(_POSIX_PATH_MAX)
-#  define PATH_MAX	_POSIX_PATH_MAX /* Posix */
-# elif defined(MAXPATHLEN)
-#  define PATH_MAX	MAXPATHLEN      /* Solaris? Also linux...*/
-# else
-#  define PATH_MAX	4096             /* Suppose, we have 4096 */
-# endif
-#endif
-/* Exit status on fatal exit. */
+/* Exit status on fatal error. */
 #define EXIT_FATAL	2
-
-#define LOCK(mutex)	pthread_mutex_lock (&mutex)
-#define UNLOCK(mutex)	pthread_mutex_unlock (&mutex)
 
 #ifndef MIN
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
@@ -51,73 +107,58 @@ extern "C" {
                               (val) > (max) ? (max) : (val))
 #endif
 
-#ifdef HAVE__ATTRIBUTE__
-# define ATTR_UNUSED __attribute__((unused))
+#ifdef NDEBUG
+#define error(...) \
+	internal_error (NULL, 0, NULL, ## __VA_ARGS__)
+#define fatal(...) \
+	internal_fatal (NULL, 0, NULL, ## __VA_ARGS__)
+#define ASSERT_ONLY ATTR_UNUSED
 #else
-# define ATTR_UNUSED
+#define error(...) \
+	internal_error (__FILE__, __LINE__, __func__, ## __VA_ARGS__)
+#define fatal(...) \
+	internal_fatal (__FILE__, __LINE__, __func__, ## __VA_ARGS__)
+#define ASSERT_ONLY
 #endif
 
-#if HAVE_STDBOOL_H
-# include <stdbool.h>
-#else
-# if ! HAVE__BOOL
-#  ifdef __cplusplus
-typedef bool _Bool;
-#  else
-typedef unsigned char _Bool;
-#  endif
-# endif
-# define bool _Bool
-# define false 0
-# define true 1
-# define __bool_true_false_are_defined 1
+#ifndef STRERROR_FN
+# define STRERROR_FN xstrerror
 #endif
 
-/* isblank() is a GNU extension */
-#ifndef isblank
-#define isblank(c) ((c) == ' ' || (c) == '\t')
-#endif
+#define error_errno(format, errnum) \
+	do { \
+		char *err##__LINE__ = STRERROR_FN (errnum); \
+		error (format ": %s", err##__LINE__); \
+		free (err##__LINE__); \
+	} while (0)
 
-/* __FUNCTION__ is a gcc extension */
-#ifndef HAVE__FUNCTION__
-# define __FUNCTION__ "UNKNOWN_FUNC"
+#ifdef __cplusplus
+extern "C" {
 #endif
-
-#define ARRAY_SIZE(x)	(sizeof(x)/sizeof(x[0]))
 
 void *xmalloc (size_t size);
 void *xcalloc (size_t nmemb, size_t size);
 void *xrealloc (void *ptr, const size_t size);
 char *xstrdup (const char *s);
+void xsleep (size_t ticks, size_t ticks_per_sec);
+char *xstrerror (int errnum);
+void xsignal (int signum, void (*func)(int));
 
-char *str_repl (char *target, const char *oldstr, const char *newstr);
-
-#ifdef NDEBUG
-#define fatal(format, ...) \
-	internal_fatal (NULL, 0, NULL, format, ## __VA_ARGS__)
-#else
-#define fatal(format, ...) \
-	internal_fatal (__FILE__, __LINE__, __FUNCTION__, format, \
-	## __VA_ARGS__)
-#endif
-
-#ifdef HAVE__ATTRIBUTE__
+void internal_error (const char *file, int line, const char *function,
+                     const char *format, ...) ATTR_PRINTF(4, 5);
 void internal_fatal (const char *file, int line, const char *function,
-		const char *format, ...)
-	__attribute__ ((format (printf, 4, 5), noreturn));
-void error (const char *format, ...) __attribute__((format (printf, 1, 2)));
-#else
-void internal_fatal (const char *file, int line, const char *function,
-		const char *format, ...);
-void error (const char *format, ...);
-#endif
-
+                     const char *format, ...) ATTR_NORETURN ATTR_PRINTF(4, 5);
 void set_me_server ();
+char *str_repl (char *target, const char *oldstr, const char *newstr);
 char *trim (const char *src, size_t len);
+char *format_msg (const char *format, ...);
+char *format_msg_va (const char *format, va_list va);
 bool is_valid_symbol (const char *candidate);
 char *create_file_name (const char *file);
+int get_realtime (struct timespec *ts);
 void sec_to_min (char *buff, const int seconds);
 const char *get_home ();
+void common_cleanup ();
 
 #ifdef __cplusplus
 }

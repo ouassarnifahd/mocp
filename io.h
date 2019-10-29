@@ -1,17 +1,10 @@
 #ifndef IO_H
 #define IO_H
 
-/* curl sometimes needs this */
-
 #include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#ifdef HAVE_SYS_SELECT_H
-# include <sys/select.h>
-#endif
-#include <unistd.h> /* fot [s]size_t */
 #include <pthread.h>
 #ifdef HAVE_CURL
+# include <sys/socket.h>     /* curl sometimes needs this */
 # include <curl/curl.h>
 #endif
 
@@ -39,7 +32,7 @@ struct io_stream_curl
 	char *url;
 	struct curl_slist *http_headers;	/* HTTP headers to send with
 						   the request */
-	char *buf;		/* buffer for data the curl gives us */
+	char *buf;		/* buffer for data that curl gives us */
 	long buf_fill;
 	int need_perform_loop;	/* do we need the perform() loop? */
 	int got_locn;	/* received a location header */
@@ -51,7 +44,7 @@ struct io_stream_curl
 	size_t icy_meta_int;	/* how often are icy metadata sent?
 				   0 - disabled, in bytes */
 	size_t icy_meta_count;	/* how many bytes was read from the last
-				   metadate packet */
+				   metadata packet */
 };
 #endif
 
@@ -62,9 +55,9 @@ typedef void (*buf_fill_callback_t) (struct io_stream *s, size_t fill,
 
 struct io_stream
 {
-	enum io_source source;
+	enum io_source source;	/* source of the file */
 	int fd;
-	size_t size;	/* source of the file if needed */
+	off_t size;	/* size of the file */
 	int errno_val;	/* errno value of the last operation  - 0 if ok */
 	int read_error; /* set to != 0 if the last read operation dailed */
 	char *strerror;	/* error string */
@@ -72,22 +65,21 @@ struct io_stream
 	int eof;	/* was the end of file reached? */
 	int after_seek;	/* are we after seek and need to do fresh read()? */
 	int buffered;	/* are we using the buffer? */
-	size_t pos;	/* current position in the file from the user point of
-			   view */
+	off_t pos;	/* current position in the file from the user point of view */
 	size_t prebuffer;	/* number of bytes left to prebuffer */
-	pthread_mutex_t io_mutex;	/* mutex for IO operations */
+	pthread_mutex_t io_mtx;	/* mutex for IO operations */
 
 #ifdef HAVE_MMAP
 	void *mem;
-	size_t mem_pos;
+	off_t mem_pos;
 #endif
 
 #ifdef HAVE_CURL
 	struct io_stream_curl curl;
 #endif
 
-	struct fifo_buf buf;
-	pthread_mutex_t buf_mutex;
+	struct fifo_buf *buf;
+	pthread_mutex_t buf_mtx;
 	pthread_cond_t buf_free_cond; /* some space became available in the
 					 buffer */
 	pthread_cond_t buf_fill_cond; /* the buffer was filled with some data */
@@ -96,7 +88,7 @@ struct io_stream
 					   thread */
 
 	struct stream_metadata {
-		pthread_mutex_t mutex;
+		pthread_mutex_t mtx;
 		char *title;	/* title of the stream */
 		char *url;
 	} metadata;
@@ -113,8 +105,8 @@ off_t io_seek (struct io_stream *s, off_t offset, int whence);
 void io_close (struct io_stream *s);
 int io_ok (struct io_stream *s);
 char *io_strerror (struct io_stream *s);
-ssize_t io_file_size (const struct io_stream *s);
-long io_tell (struct io_stream *s);
+off_t io_file_size (const struct io_stream *s);
+off_t io_tell (struct io_stream *s);
 int io_eof (struct io_stream *s);
 void io_init ();
 void io_cleanup ();

@@ -15,35 +15,18 @@
 # include "config.h"
 #endif
 
-/* _XOPEN_SOURCE is known to break compilation under OpenBSD. */
-#ifndef OPENBSD
-# define _XOPEN_SOURCE	500 /* for wcswidth() */
-#endif
-
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
 #include <assert.h>
 #include <errno.h>
+#include <math.h>
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 #include <wctype.h>
 #include <wchar.h>
-
-/* This breaks compilation on FreeBSD 5.4, so use it only on
- * Linux and OpenBSD. */
-#if defined(LINUX) || defined(OPENBSD)
-# define _XOPEN_SOURCE_EXTENDED /* for wget_wch() */
-#endif
-
-#ifdef HAVE_NCURSESW_H
-# include <ncursesw/curses.h>
-#elif HAVE_NCURSES_H
-# include <ncurses.h>
-#elif HAVE_CURSES_H
-# include <curses.h>
-#endif
 
 #include "common.h"
 #include "menu.h"
@@ -235,11 +218,11 @@ static struct info_win
 	struct entry_history user_history;
 
 	/* true/false options values */
-	int state_stereo;
-	int state_shuffle;
-	int state_repeat;
-	int state_next;
-	int state_net;
+	bool state_stereo;
+	bool state_shuffle;
+	bool state_repeat;
+	bool state_next;
+	bool state_net;
 
 	int bitrate;		/* in kbps */
 	int rate;		/* in kHz */
@@ -271,7 +254,7 @@ static struct info_win
 static bool has_xterm = false;
 
 /* Are we running inside screen? */
-static int has_screen = 0;
+static bool has_screen = false;
 
 /* Was the interface initialized? */
 static int iface_initialized = 0;
@@ -358,8 +341,8 @@ static char *entry_history_get (const struct entry_history *h, const int num)
 	return xstrdup (h->items[num]);
 }
 
-/* Draw the entry. Use this function at the end of screen drawing, because
- * Set the cursor position in the right place. */
+/* Draw the entry.  Use this function at the end of screen drawing
+ * because it sets the cursor position in the right place. */
 static void entry_draw (const struct entry *e, WINDOW *w, const int posx,
 		const int posy)
 {
@@ -797,11 +780,11 @@ static void side_menu_init (struct side_menu *m, const enum side_menu_type type,
 
 		menu_set_items_numbering (m->menu.list.main,
 				type == MENU_PLAYLIST
-				&& options_get_int("PlaylistNumbering"));
+				&& options_get_bool("PlaylistNumbering"));
 		menu_set_show_format (m->menu.list.main,
-				options_get_int("ShowFormat"));
+				options_get_bool("ShowFormat"));
 		menu_set_show_time (m->menu.list.main,
-				strcasecmp(options_get_str("ShowTime"), "no"));
+				strcasecmp(options_get_symb("ShowTime"), "no"));
 		menu_set_info_attr_normal (m->menu.list.main,
 				get_color(CLR_MENU_ITEM_INFO));
 		menu_set_info_attr_sel (m->menu.list.main,
@@ -851,12 +834,6 @@ static void side_menu_set_title (struct side_menu *m, const char *title)
 	m->title = xstrdup (title);
 }
 
-/* Similar function is only available in C99, so do it here. */
-static int xround (const float f)
-{
-	return f - (int)f > 0.5 ? (int)(f + 1.0) : (int)f;
-}
-
 /* Parse one layout coordinate from "0,2,54%,1" and put it in val.
  * Max is the maximum value of the field.  It's also used when processing
  * percent values.
@@ -876,9 +853,8 @@ static bool parse_layout_coordinate (const char *fmt, int *val, const int max)
 		return false;
 
 	if (*e == '%')
-		*val = xround (max * v / 100.0);
-	else
-		*val = v;
+		v = lroundf (max * v / 100.0 - 0.1);
+	*val = v;
 
 	if (!RANGE(0, *val, max)) {
 		logit ("Coordinate out of range - %d is not in (0, %d)", *val, max);
@@ -892,7 +868,7 @@ static bool parse_layout_coordinate (const char *fmt, int *val, const int max)
 static bool parse_layout (struct main_win_layout *l, lists_t_strs *fmt)
 {
 	int ix;
-	bool result;
+	bool result = false;
 	lists_t_strs *format;
 
 	assert (l != NULL);
@@ -906,7 +882,6 @@ static bool parse_layout (struct main_win_layout *l, lists_t_strs *fmt)
 	l->menus[1] = l->menus[0];
 	l->menus[2] = l->menus[0];
 
-	result = false;
 	format = lists_strs_new (6);
 	for (ix = 0; ix < lists_strs_size (fmt); ix += 1) {
 		const char *menu, *name;
@@ -954,8 +929,7 @@ static bool parse_layout (struct main_win_layout *l, lists_t_strs *fmt)
 			goto err;
 		}
 		if (p.y + p.height > LINES - 4) {
-			logit ("Y + height is more than LINES - 4 (%d)",
-					LINES - 4);
+			logit ("Y + height is more than LINES - 4 (%d)", LINES - 4);
 			goto err;
 		}
 
@@ -979,7 +953,7 @@ err:
 static void main_win_init (struct main_win *w, lists_t_strs *layout_fmt)
 {
 	struct main_win_layout l;
-	int res;
+	bool rc ASSERT_ONLY;
 
 	assert (w != NULL);
 
@@ -996,8 +970,8 @@ static void main_win_init (struct main_win *w, lists_t_strs *layout_fmt)
 	w->lyrics_screen_top = 0;
 	w->layout_fmt = layout_fmt;
 
-	res = parse_layout (&l, layout_fmt);
-	assert (res);
+	rc = parse_layout (&l, layout_fmt);
+	assert (rc);
 
 	side_menu_init (&w->menus[0], MENU_DIR, w->win, &l.menus[0]);
 	side_menu_init (&w->menus[1], MENU_PLAYLIST, w->win, &l.menus[1]);
@@ -1041,7 +1015,7 @@ static char *make_menu_title (const char *plist_title,
 				char *old_title = title;
 
 				title = xstrdup (slash + 1);
-		                free (old_title);
+				free (old_title);
 			}
 		}
 	}
@@ -1072,7 +1046,7 @@ static int add_to_menu (struct menu *menu, const struct plist *plist,
 	free (title);
 
 	if (item->tags && item->tags->time != -1) {
-		char time_str[6];
+		char time_str[32];
 
 		sec_to_min (time_str, item->tags->time);
 		menu_item_set_time (added, time_str);
@@ -1106,11 +1080,11 @@ static void side_menu_clear (struct side_menu *m)
 	menu_free (m->menu.list.main);
 	side_menu_init_menu (m);
 	menu_set_items_numbering (m->menu.list.main, m->type == MENU_PLAYLIST
-			&& options_get_int("PlaylistNumbering"));
+			&& options_get_bool("PlaylistNumbering"));
 
-	menu_set_show_format (m->menu.list.main, options_get_int("ShowFormat"));
+	menu_set_show_format (m->menu.list.main, options_get_bool("ShowFormat"));
 	menu_set_show_time (m->menu.list.main,
-			strcasecmp(options_get_str("ShowTime"), "no"));
+			strcasecmp(options_get_symb("ShowTime"), "no"));
 	menu_set_info_attr_normal (m->menu.list.main, get_color(CLR_MENU_ITEM_INFO));
 	menu_set_info_attr_sel (m->menu.list.main, get_color(CLR_MENU_ITEM_INFO_SELECTED));
 	menu_set_info_attr_marked (m->menu.list.main, get_color(CLR_MENU_ITEM_INFO_MARKED));
@@ -1145,7 +1119,7 @@ static void side_menu_make_list_content (struct side_menu *m,
 
 #ifdef HAVE_RCC
 			char *t_str = NULL;
-			if (options_get_int("UseRCCForFilesystem")) {
+			if (options_get_bool("UseRCCForFilesystem")) {
 				strcpy (title, strrchr (lists_strs_at (dirs, i), '/') + 1);
 				strcat (title, "/");
 				t_str = xstrdup (title);
@@ -1155,7 +1129,7 @@ static void side_menu_make_list_content (struct side_menu *m,
 			}
 			else
 #endif
-			if (options_get_int ("FileNamesIconv"))
+			if (options_get_bool ("FileNamesIconv"))
 			{
 				char *conv_title = files_iconv_str (
 						strrchr (lists_strs_at (dirs, i), '/') + 1);
@@ -1196,7 +1170,7 @@ static void side_menu_make_list_content (struct side_menu *m,
 		if (!plist_deleted(files, i))
 			add_to_menu (m->menu.list.main, files, i,
 					m->type == MENU_PLAYLIST
-					&& options_get_int("PlaylistFullPaths"));
+					&& options_get_bool("PlaylistFullPaths"));
 	}
 
 	m->total_time = plist_total_time (files, &m->total_time_for_all);
@@ -1208,7 +1182,7 @@ static void clear_area (WINDOW *w, const int posx, const int posy,
 	int y;
 	char line[512];
 
-	assert (width < (int)sizeof(line));
+	assert (width < ssizeof(line));
 
 	memset (line, ' ', width);
 	line[width] = 0;
@@ -1307,7 +1281,7 @@ static void side_menu_draw (const struct side_menu *m, const int active)
 	if (m->type == MENU_DIR || m->type == MENU_PLAYLIST
 			|| m->type == MENU_THEMES) {
 		menu_draw (m->menu.list.main, active);
-		if (options_get_int("UseCursorSelection"))
+		if (options_get_bool("UseCursorSelection"))
 			menu_set_cursor (m->menu.list.main);
 	}
 	else
@@ -1385,12 +1359,12 @@ static char *side_menu_get_curr_file (const struct side_menu *m)
 static struct side_menu *find_side_menu (struct main_win *w,
 		const enum side_menu_type type)
 {
-	int i;
+	size_t ix;
 
 	assert (w != NULL);
 
-	for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++) {
-		struct side_menu *m = &w->menus[i];
+	for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1) {
+		struct side_menu *m = &w->menus[ix];
 
 		if (m->visible && m->type == type)
 			return m;
@@ -1425,7 +1399,7 @@ static void update_menu_item (struct menu_item *mi,
 	item = &plist->items[n];
 
 	if (item->tags && item->tags->time != -1) {
-		char time_str[6];
+		char time_str[32];
 
 		sec_to_min (time_str, item->tags->time);
 		menu_item_set_time (mi, time_str);
@@ -1473,13 +1447,13 @@ static int side_menu_update_item (struct side_menu *m,
 
 	if ((mi = menu_find(m->menu.list.main, file))) {
 		update_menu_item (mi, plist, n, m->type == MENU_PLAYLIST
-				&& options_get_int("PlaylistFullpaths"));
+				&& options_get_bool("PlaylistFullpaths"));
 		visible = menu_is_visible (m->menu.list.main, mi);
 	}
 	if (m->menu.list.copy
 			&& (mi = menu_find(m->menu.list.copy, file))) {
 		update_menu_item (mi, plist, n, m->type == MENU_PLAYLIST
-				&& options_get_int("PlaylistFullpaths"));
+				&& options_get_bool("PlaylistFullpaths"));
 		visible = visible || menu_is_visible (m->menu.list.main, mi);
 	}
 
@@ -1540,7 +1514,7 @@ static int side_menu_add_plist_item (struct side_menu *m,
 			: m->menu.list.main,
 			plist, num,
 			m->type == MENU_PLAYLIST
-			&& options_get_int("PlaylistFullPaths"));
+			&& options_get_bool("PlaylistFullPaths"));
 	m->total_time = plist_total_time (plist, &m->total_time_for_all);
 
 	return visible;
@@ -1569,7 +1543,7 @@ static void side_menu_update_show_time (struct side_menu *m)
 	assert (m->type == MENU_DIR || m->type == MENU_PLAYLIST);
 
 	menu_set_show_time (m->menu.list.main,
-				strcasecmp(options_get_str("ShowTime"), "no"));
+				strcasecmp(options_get_symb("ShowTime"), "no"));
 }
 
 static void side_menu_update_show_format (struct side_menu *m)
@@ -1578,7 +1552,7 @@ static void side_menu_update_show_format (struct side_menu *m)
 	assert (m->visible);
 	assert (m->type == MENU_DIR || m->type == MENU_PLAYLIST);
 
-	menu_set_show_format (m->menu.list.main, options_get_int("ShowFormat"));
+	menu_set_show_format (m->menu.list.main, options_get_bool("ShowFormat"));
 }
 
 static void side_menu_get_state (const struct side_menu *m,
@@ -1811,9 +1785,10 @@ static void main_win_draw_lyrics_screen (const struct main_win *w)
 	}
 	lists_strs_free (lyrics_array);
 }
+
 static void main_win_draw (struct main_win *w)
 {
-	int i;
+	size_t ix;
 
 	if (w->in_help)
 		main_win_draw_help_screen (w);
@@ -1825,9 +1800,9 @@ static void main_win_draw (struct main_win *w)
 		werase (w->win);
 
 		/* Draw all visible menus.  Draw the selected menu last. */
-		for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++)
-			if (w->menus[i].visible && i != w->selected_menu)
-				side_menu_draw (&w->menus[i], 0);
+		for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1)
+			if (w->menus[ix].visible && ix != (size_t)w->selected_menu)
+				side_menu_draw (&w->menus[ix], 0);
 
 		side_menu_draw (&w->menus[w->selected_menu], 1);
 	}
@@ -1842,7 +1817,7 @@ static enum side_menu_type iface_to_side_menu (const enum iface_menu iface_menu)
 			return MENU_DIR;
 		default:
 			abort (); /* BUG */
-	};
+	}
 }
 
 static void main_win_set_dir_content (struct main_win *w,
@@ -1899,20 +1874,20 @@ static void main_win_update_dir_content (struct main_win *w,
 static void main_win_switch_to (struct main_win *w,
 		const enum side_menu_type menu)
 {
-	int i;
+	size_t ix;
 
 	assert (w != NULL);
 
 	if (w->selected_menu == 2) /* if the themes menu is selected */
 		side_menu_destroy (&w->menus[2]);
 
-	for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++)
-		if (w->menus[i].type == menu) {
-			w->selected_menu = i;
+	for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1)
+		if (w->menus[ix].type == menu) {
+			w->selected_menu = ix;
 			break;
 		}
 
-	assert (i < (int)ARRAY_SIZE(w->menus));
+	assert (ix < ARRAY_SIZE(w->menus));
 
 	main_win_draw (w);
 }
@@ -2034,7 +2009,7 @@ static void main_win_update_item (struct main_win *w,
 /* Mark the played file on all lists of files or unmark it when file is NULL. */
 static void main_win_set_played_file (struct main_win *w, const char *file)
 {
-	int i;
+	size_t ix;
 
 	assert (w != NULL);
 
@@ -2042,8 +2017,8 @@ static void main_win_set_played_file (struct main_win *w, const char *file)
 		free (w->curr_file);
 	w->curr_file = xstrdup (file);
 
-	for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++) {
-		struct side_menu *m = &w->menus[i];
+	for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1) {
+		struct side_menu *m = &w->menus[ix];
 
 		if (m->visible && (m->type == MENU_DIR
 					|| m->type == MENU_PLAYLIST)) {
@@ -2234,15 +2209,15 @@ static void main_win_swap_plist_items (struct main_win *w, const char *file1,
 static void main_win_use_layout (struct main_win *w, lists_t_strs *layout_fmt)
 {
 	struct main_win_layout l;
-	int res;
+	bool rc ASSERT_ONLY;
 
 	assert (w != NULL);
 	assert (layout_fmt != NULL);
 
 	w->layout_fmt = layout_fmt;
 
-	res = parse_layout (&l, layout_fmt);
-	assert (res);
+	rc = parse_layout (&l, layout_fmt);
+	assert (rc);
 
 	side_menu_resize (&w->menus[0], &l.menus[0]);
 	side_menu_resize (&w->menus[1], &l.menus[1]);
@@ -2272,7 +2247,7 @@ static void validate_layouts ()
 static void main_win_resize (struct main_win *w)
 {
 	struct main_win_layout l;
-	int res;
+	bool rc ASSERT_ONLY;
 
 	assert (w != NULL);
 
@@ -2280,8 +2255,8 @@ static void main_win_resize (struct main_win *w)
 	wresize (w->win, LINES - 4, COLS);
 	werase (w->win);
 
-	res = parse_layout (&l, w->layout_fmt);
-	assert (res);
+	rc = parse_layout (&l, w->layout_fmt);
+	assert (rc);
 
 	side_menu_resize (&w->menus[0], &l.menus[0]);
 	side_menu_resize (&w->menus[1], &l.menus[1]);
@@ -2315,16 +2290,16 @@ static void main_win_make_visible (struct main_win *w,
 
 static void main_win_update_show_time (struct main_win *w)
 {
-	int i;
+	size_t ix;
 
 	assert (w != NULL);
 
-	for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++) {
-		struct side_menu *m = &w->menus[i];
+	for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1) {
+		struct side_menu *m = &w->menus[ix];
 
 		if (m->visible && (m->type == MENU_DIR
 					|| m->type == MENU_PLAYLIST))
-			side_menu_update_show_time (&w->menus[i]);
+			side_menu_update_show_time (&w->menus[ix]);
 	}
 
 	main_win_draw (w);
@@ -2341,16 +2316,16 @@ static void main_win_select_file (struct main_win *w, const char *file)
 
 static void main_win_update_show_format (struct main_win *w)
 {
-	int i;
+	size_t ix;
 
 	assert (w != NULL);
 
-	for (i = 0; i < (int)ARRAY_SIZE(w->menus); i++) {
-		struct side_menu *m = &w->menus[i];
+	for (ix = 0; ix < ARRAY_SIZE(w->menus); ix += 1) {
+		struct side_menu *m = &w->menus[ix];
 
 		if (m->visible && (m->type == MENU_DIR
 					|| m->type == MENU_PLAYLIST))
-			side_menu_update_show_format (&w->menus[i]);
+			side_menu_update_show_format (&w->menus[ix]);
 	}
 
 	main_win_draw (w);
@@ -2386,7 +2361,7 @@ static void soft_write (int fd, const void *buf, size_t count)
 
 	rc = write (fd, buf, count);
 	if (rc < 0)
-		logit ("write() failed: %s", strerror(errno));
+		log_errno ("write() failed", errno);
 }
 
 /* Set the has_xterm variable. */
@@ -2405,26 +2380,26 @@ static void detect_term ()
 
 static void xterm_set_title (const int state, const char *title)
 {
-	if (has_xterm && options_get_int("SetXtermTitle")) {
+	if (has_xterm && options_get_bool("SetXtermTitle")) {
 		soft_write (1, "\033]0;", sizeof("\033]0;")-1);
 		soft_write (1, "MOC ", sizeof("MOC ")-1);
 
 		switch (state) {
 			case STATE_PLAY:
-				soft_write (1, "[play]", sizeof("[play]")-1);
+				soft_write (1, ">", sizeof(">")-1);
 				break;
 			case STATE_STOP:
-				soft_write (1, "[stop]", sizeof("[stop]")-1);
+				soft_write (1, "[]", sizeof("[]")-1);
 				break;
 			case STATE_PAUSE:
-				soft_write (1, "[pause]", sizeof("[pause]")-1);
+				soft_write (1, "||", sizeof("||")-1);
 				break;
 		}
 
         if (title)
         {
             soft_write (1, " - ", sizeof(" - ")-1);
-            if (options_get_int ("NonUTFXterm"))
+            if (options_get_bool ("NonUTFXterm"))
             {
                 char *iconv_title = xterm_iconv_str (title);
                 soft_write (1, iconv_title, strlen(iconv_title));
@@ -2443,39 +2418,42 @@ static void xterm_set_title (const int state, const char *title)
 
 static void xterm_clear_title ()
 {
-	if (has_xterm && options_get_int("SetXtermTitle"))
+	if (has_xterm && options_get_bool("SetXtermTitle"))
 		soft_write (1, "\033]2;\007", sizeof("\033]2;\007")-1);
 }
 
 /* Set the has_screen variable. */
 static void detect_screen ()
 {
-	char *window;
-	char *term;
+	char *term, *window;
 
-	if (((term = getenv("TERM")) && !strcmp(term, "screen"))
-	   || ((window = getenv("WINDOW")) && isdigit(*window)))
+	term = getenv ("TERM");
+	window = getenv ("WINDOW");
+	if (term && window && isdigit (*window)) {
+		lists_t_strs *screen_terms;
 
-		has_screen = 1;
+		screen_terms = options_get_list ("ScreenTerms");
+		has_screen = lists_strs_exists (screen_terms, term);
+	}
 }
 
 #define SCREEN_TITLE_START "\033k"
 #define SCREEN_TITLE_END "\033\\"
 static void screen_set_title (const int state, const char *title)
 {
-	if (has_screen && options_get_int("SetScreenTitle")) {
+	if (has_screen && options_get_bool("SetScreenTitle")) {
 		soft_write (1, SCREEN_TITLE_START, sizeof(SCREEN_TITLE_START)-1);
 		soft_write (1, "MOC ", sizeof("MOC ")-1);
 
 		switch (state) {
 			case STATE_PLAY:
-				soft_write (1, "[play]", sizeof("[play]")-1);
+				soft_write (1, ">", sizeof(">")-1);
 				break;
 			case STATE_STOP:
-				soft_write (1, "[stop]", sizeof("[stop]")-1);
+				soft_write (1, "[]", sizeof("[]")-1);
 				break;
 			case STATE_PAUSE:
-				soft_write (1, "[pause]", sizeof("[pause]")-1);
+				soft_write (1, "||", sizeof("||")-1);
 				break;
 		}
 
@@ -2490,7 +2468,7 @@ static void screen_set_title (const int state, const char *title)
 
 static void screen_clear_title ()
 {
-	if (has_screen && options_get_int("SetScreenTitle"))
+	if (has_screen && options_get_bool("SetScreenTitle"))
 	{
 		soft_write (1, SCREEN_TITLE_START, sizeof(SCREEN_TITLE_START)-1);
 		soft_write (1, SCREEN_TITLE_END, sizeof(SCREEN_TITLE_END)-1);
@@ -2501,7 +2479,7 @@ static void screen_clear_title ()
  * ASCII characters. */
 static void init_lines ()
 {
-	if (options_get_int("ASCIILines")) {
+	if (options_get_bool("ASCIILines")) {
 		lines.vert = '|';
 		lines.horiz = '-';
 		lines.ulcorn = '+';
@@ -2542,8 +2520,13 @@ static void bar_update_title (struct bar *b)
 	else {
 		sprintf (b->title, "%*s", b->width - 7, b->orig_title);
 		strcpy (pct, " 100%  ");
+
+		/* The snprintf(3) below can never output 310 bytes! */
+		SUPPRESS_FORMAT_TRUNCATION_WARNING
 		if (b->filled < 99.99)
 			snprintf (pct, sizeof (pct), "  %02.0f%%  ", b->filled);
+		UNSUPPRESS_FORMAT_TRUNCATION_WARNING
+
 		strncpy (&b->title[b->width - 7], pct, strlen (pct));
 	}
 }
@@ -2565,7 +2548,7 @@ static void bar_init (struct bar *b, const int width, const char *title,
 		const int fill_color, const int empty_color)
 {
 	assert (b != NULL);
-	assert (width > 5 && width < (int)sizeof(b->title));
+	assert (width > 5 && width < ssizeof(b->title));
 	assert (title != NULL || !show_val);
 
 	b->width = width;
@@ -2618,7 +2601,7 @@ static void bar_set_fill (struct bar *b, const double fill)
 static void bar_resize (struct bar *b, const int width)
 {
 	assert (b != NULL);
-	assert (width > 5 && width < (int)sizeof(b->title));
+	assert (width > 5 && width < ssizeof(b->title));
 
 	if (b->show_val && b->width < width) {
 		char *new_title = xmalloc (width + 1);
@@ -2651,7 +2634,7 @@ static struct queued_message *queued_message_create (enum message_type type)
 	result->data = NULL;
 
 	return result;
-};
+}
 
 static void queued_message_destroy (struct queued_message *msg)
 {
@@ -2663,7 +2646,7 @@ static void queued_message_destroy (struct queued_message *msg)
 		free (msg->prompt);
 
 	free (msg);
-};
+}
 
 static void set_startup_message (struct info_win *w)
 {
@@ -2674,7 +2657,7 @@ static void set_startup_message (struct info_win *w)
 	w->current_message->timeout = time (NULL);
 	w->current_message->timeout += options_get_int ("MessageLingerTime");
 
-	if (!key_was_redefined (KEY_CMD_HELP)) {
+	if (is_help_still_h ()) {
 		struct queued_message *msg;
 
 		msg = queued_message_create (NORMAL_MSG);
@@ -2701,12 +2684,12 @@ static void info_win_init (struct info_win *w)
 
 	w->too_small = 0;
 
-	w->state_stereo = 0;
-	w->state_shuffle = 0;
-	w->state_repeat = 0;
-	w->state_next = 0;
+	w->state_stereo = false;
+	w->state_shuffle = false;
+	w->state_repeat = false;
+	w->state_next = false;
 	w->state_play = STATE_STOP;
-	w->state_net = 0;
+	w->state_net = false;
 
 	w->bitrate = -1;
 	w->rate = -1;
@@ -2895,7 +2878,7 @@ static void info_win_set_state (struct info_win *w, const int state)
 
 static void info_win_draw_time (const struct info_win *w)
 {
-	char time_str[6];
+	char time_str[32];
 
 	assert (w != NULL);
 
@@ -3087,7 +3070,7 @@ static void info_win_set_mixer_value (struct info_win *w, const int value)
 
 /* Draw a switch that is turned on or off in form of [TITLE]. */
 static void info_win_draw_switch (const struct info_win *w, const int posx,
-		const int posy, const char *title, const int value)
+		const int posy, const char *title, const bool value)
 {
 	assert (w != NULL);
 	assert (title != NULL);
@@ -3290,7 +3273,7 @@ static void info_win_set_channels (struct info_win *w, const int channels)
 	assert (w != NULL);
 	assert (channels == 1 || channels == 2);
 
-	w->state_stereo = (channels == 2) ? 1 : 0;
+	w->state_stereo = (channels == 2);
 	info_win_draw_options_state (w);
 }
 
@@ -3310,7 +3293,7 @@ static enum entry_type info_win_get_entry_type (const struct info_win *w)
 }
 
 static void info_win_set_option_state (struct info_win *w, const char *name,
-		const int value)
+		const bool value)
 {
 	assert (w != NULL);
 	assert (name != NULL);
@@ -3330,7 +3313,7 @@ static void info_win_set_option_state (struct info_win *w, const char *name,
 }
 
 /* Convert time in second to min:sec text format(for total time in playlist).
- * buff must be 10 chars long. */
+ * 'buff' must be 48 chars long. */
 static void sec_to_min_plist (char *buff, const int seconds)
 {
 	assert (seconds >= 0);
@@ -3342,7 +3325,7 @@ static void sec_to_min_plist (char *buff, const int seconds)
 		min  = (seconds / 60) % 60;
 		sec  = seconds % 60;
 
-		snprintf (buff, 10, "%03d:%02d:%02d", hour, min, sec);
+		snprintf (buff, 48, "%03d:%02d:%02d", hour, min, sec);
 	}
 	else
 		strcpy (buff, "!!!!!!!!!");
@@ -3353,7 +3336,7 @@ static void info_win_draw_files_time (const struct info_win *w)
 	assert (w != NULL);
 
 	if (!w->in_entry && !w->too_small) {
-		char buf[10];
+		char buf[48];
 
 		sec_to_min_plist (buf, w->plist_time);
 		wmove (w->win, 0, COLS - 12);
@@ -3460,7 +3443,7 @@ static void info_win_entry_disable (struct info_win *w)
 	entry_destroy (&w->entry);
 	w->in_entry = 0;
 
-	if (!options_get_int("UseCursorSelection"))
+	if (!options_get_bool("UseCursorSelection"))
 		curs_set (0);
 	info_win_draw (w);
 }
@@ -3619,6 +3602,14 @@ static void info_win_resize (struct info_win *w)
 
 void windows_init ()
 {
+	if (getenv ("ESCDELAY") == NULL) {
+#ifdef HAVE_SET_ESCDELAY
+		set_escdelay (25);
+#else
+		setenv ("ESCDELAY", "25", 0);
+#endif
+	}
+
 	utf8_init ();
 	if (!initscr ())
 		fatal ("Can't initialize terminal!");
@@ -3626,7 +3617,7 @@ void windows_init ()
 	validate_layouts ();
 	cbreak ();
 	noecho ();
-	if (!options_get_int ("UseCursorSelection"))
+	if (!options_get_bool ("UseCursorSelection"))
 		curs_set (0);
 	use_default_colors ();
 
@@ -3654,6 +3645,7 @@ void windows_init ()
 void windows_reset ()
 {
 	if (screen_initialized) {
+		screen_initialized = 0;
 
 		/* endwin() sometimes fails on X-terminals when we get SIGCHLD
 		 * at this moment.  Double invocation seems to solve this. */
@@ -3663,7 +3655,6 @@ void windows_reset ()
 		/* Make sure that the next line after we exit will be "clear". */
 		printf ("\n");
 		fflush (stdout);
-
 	}
 }
 
@@ -3701,7 +3692,7 @@ static void iface_refresh_screen ()
 }
 
 /* Set state of the options displayed in the information window. */
-void iface_set_option_state (const char *name, const int value)
+void iface_set_option_state (const char *name, const bool value)
 {
 	assert (name != NULL);
 
@@ -3767,6 +3758,67 @@ void iface_set_dir_content (const enum iface_menu iface_menu,
 	iface_refresh_screen ();
 }
 
+/* Refreshes all menu structs with updated theme attributes. */
+void iface_update_attrs ()
+{
+	size_t ix;
+
+	info_win.mixer_bar.fill_color = get_color (CLR_MIXER_BAR_FILL);
+	info_win.mixer_bar.empty_color = get_color (CLR_MIXER_BAR_EMPTY);
+	info_win.time_bar.fill_color = get_color (CLR_TIME_BAR_FILL);
+	info_win.time_bar.empty_color = get_color (CLR_TIME_BAR_EMPTY);
+
+	for (ix = 0; ix < ARRAY_SIZE(main_win.menus); ix += 1) {
+		int item_num;
+		struct side_menu *m = &main_win.menus[ix];
+		struct menu *menu = m->menu.list.main;
+		struct menu_item *mi;
+
+		if (m->type == MENU_DIR || m->type == MENU_PLAYLIST) {
+			menu_set_info_attr_normal (menu, get_color (CLR_MENU_ITEM_INFO));
+			menu_set_info_attr_sel (menu, get_color (CLR_MENU_ITEM_INFO_SELECTED));
+			menu_set_info_attr_marked (menu, get_color (CLR_MENU_ITEM_INFO_MARKED));
+			menu_set_info_attr_sel_marked (menu, get_color (CLR_MENU_ITEM_INFO_MARKED_SELECTED));
+
+			for (mi = menu->items, item_num = 0;
+			     mi && item_num < menu->nitems;
+			     mi = mi->next, item_num += 1) {
+				if (mi->type == F_DIR) {
+					menu_item_set_attr_normal (mi, get_color (CLR_MENU_ITEM_DIR));
+					menu_item_set_attr_sel (mi, get_color (CLR_MENU_ITEM_DIR_SELECTED));
+				}
+				else if (mi->type == F_PLAYLIST) {
+					menu_item_set_attr_normal (mi, get_color (CLR_MENU_ITEM_PLAYLIST));
+					menu_item_set_attr_sel (mi, get_color (CLR_MENU_ITEM_PLAYLIST_SELECTED));
+				}
+				else {
+					menu_item_set_attr_normal (mi, get_color (CLR_MENU_ITEM_FILE));
+					menu_item_set_attr_sel (mi, get_color (CLR_MENU_ITEM_FILE_SELECTED));
+				}
+			}
+		}
+		else {
+			menu_set_info_attr_normal (menu, get_color (CLR_MENU_ITEM_FILE));
+			menu_set_info_attr_sel (menu, get_color (CLR_MENU_ITEM_FILE_SELECTED));
+
+			for (mi = menu->items, item_num = 0;
+			     mi && item_num < menu->nitems;
+			     mi = mi->next, item_num += 1) {
+				menu_item_set_attr_normal (mi, get_color (CLR_MENU_ITEM_FILE));
+				menu_item_set_attr_sel (mi, get_color (CLR_MENU_ITEM_FILE_SELECTED));
+			}
+		}
+	}
+}
+
+void iface_update_theme_selection (const char *file)
+{
+    /* menus[2] is theme menu. */
+    assert (main_win.menus[2].menu.list.main->selected);
+
+    menu_setcurritem_file (main_win.menus[2].menu.list.main, file);
+}
+
 /* Like iface_set_dir_content(), but before replacing the menu content, save
  * the menu state (selected file, view position) and restore it after making
  * a new menu. */
@@ -3815,7 +3867,7 @@ void iface_set_title (const enum iface_menu menu, const char *title)
 
 	assert (title != NULL);
 
-    if (options_get_int ("FileNamesIconv"))
+    if (options_get_bool ("FileNamesIconv"))
     {
         char *conv_title = NULL;
         conv_title = files_iconv_str (title);
@@ -3840,10 +3892,15 @@ void iface_get_key (struct iface_key *k)
 {
 	wint_t ch;
 
-	if ((ch = wgetch(main_win.win)) == (wint_t)ERR)
+	ch = wgetch (main_win.win);
+	if (ch == (wint_t)ERR)
 		interface_fatal ("wgetch() failed!");
 
-	if (ch < 32 && ch != '\n' && ch != '\t') {
+	/* Handle keypad ENTER as newline. */
+	if (ch == KEY_ENTER)
+		ch = '\n';
+
+	if (ch < 32 && ch != '\n' && ch != '\t' && ch != KEY_ESCAPE) {
 		/* Unprintable, generally control sequences */
 		k->type = IFACE_KEY_FUNCTION;
 		k->key.func = ch;
@@ -3862,9 +3919,11 @@ void iface_get_key (struct iface_key *k)
 		if (wget_wch(main_win.win, &ch) == ERR)
 			interface_fatal ("wget_wch() failed!");
 #endif
+
 		/* Recognize meta sequences */
 		if (ch == KEY_ESCAPE) {
-			if((meta = wgetch(main_win.win)) != ERR)
+			meta = wgetch (main_win.win);
+			if (meta != ERR)
 				ch = meta | META_KEY_FLAG;
 			k->type = IFACE_KEY_FUNCTION;
 			k->key.func = ch;
@@ -4077,10 +4136,10 @@ void iface_error (const char *msg)
 /* Handle screen resizing. */
 void iface_resize ()
 {
-	check_term_size (&main_win, &info_win);
-	validate_layouts ();
 	endwin ();
 	refresh ();
+	check_term_size (&main_win, &info_win);
+	validate_layouts ();
 	main_win_resize (&main_win);
 	info_win_resize (&info_win);
 	iface_refresh_screen ();
@@ -4275,7 +4334,7 @@ void iface_handle_lyrics_key (const struct iface_key *k)
 void iface_toggle_layout ()
 {
 	static int curr_layout = 1;
-	char layout_option[10];
+	char layout_option[32];
 	lists_t_strs *layout_fmt;
 
 	if (++curr_layout > 3)
@@ -4345,7 +4404,7 @@ void iface_temporary_exit ()
 void iface_restore ()
 {
 	iface_refresh ();
-	if (!options_get_int("UseCursorSelection"))
+	if (!options_get_bool("UseCursorSelection"))
 		curs_set (0);
 }
 
@@ -4439,4 +4498,3 @@ void iface_update_queue_position_last (const struct plist *queue,
 	update_queue_position (playlist, dir_list, queue->items[i].file, pos);
 	iface_refresh_screen ();
 }
-

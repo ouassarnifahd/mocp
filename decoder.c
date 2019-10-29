@@ -14,8 +14,9 @@
 #endif
 
 #include <stdio.h>
-#include <stddef.h>
 #include <string.h>
+#include <strings.h>
+#include <ctype.h>
 #include <stdarg.h>
 #include <errno.h>
 #include <assert.h>
@@ -26,7 +27,6 @@
 #include "files.h"
 #include "log.h"
 #include "io.h"
-#include "compat.h"
 #include "options.h"
 
 static struct plugin {
@@ -35,7 +35,7 @@ static struct plugin {
 	struct decoder *decoder;
 } plugins[16];
 
-#define PLUGINS_NUM			(sizeof(plugins)/sizeof(plugins[0]))
+#define PLUGINS_NUM			(ARRAY_SIZE(plugins))
 
 static int plugins_num = 0;
 
@@ -50,7 +50,7 @@ struct decoder_s_preference {
 	int decoders;                         /* number of decoders */
 	int decoder_list[PLUGINS_NUM];        /* decoder indices */
 	char *subtype;                        /* MIME subtype or NULL */
-	char type[FLEXIBLE_ARRAY_MEMBER];     /* MIME type or filename extn */
+	char type[];                          /* MIME type or filename extn */
 };
 typedef struct decoder_s_preference decoder_t_preference;
 static decoder_t_preference *preferences = NULL;
@@ -222,9 +222,30 @@ char *file_type_name (const char *file)
 		return NULL;
 
 	memset (buf, 0, sizeof (buf));
-	plugins[i].decoder->get_name (file, buf);
+	if (plugins[i].decoder->get_name)
+		plugins[i].decoder->get_name (file, buf);
 
-	assert (buf[0]);
+	/* Attempt a default name if we have nothing else. */
+	if (!buf[0]) {
+		char *ext;
+
+		ext = ext_pos (file);
+		if (ext) {
+			size_t len;
+
+			len = strlen (ext);
+			for (size_t ix = 0; ix < len; ix += 1) {
+				if (ix > 1) {
+					buf[2] = toupper (ext[len - 1]);
+					break;
+				}
+				buf[ix] = toupper (ext[ix]);
+			}
+		}
+	}
+
+	if (!buf[0])
+		return NULL;
 
 	return buf;
 }
@@ -377,11 +398,24 @@ static char *list_decoder_names (int *decoder_list, int count)
 	names = lists_strs_new (count);
 	for (ix = 0; ix < count; ix += 1)
 		lists_strs_append (names, plugins[decoder_list[ix]].name);
+
 	if (have_tremor) {
 		ix = lists_strs_find (names, "vorbis");
 		if (ix < lists_strs_size (names))
 			lists_strs_replace (names, ix, "vorbis(tremor)");
 	}
+
+	ix = lists_strs_find (names, "ffmpeg");
+	if (ix < lists_strs_size (names)) {
+#if defined(HAVE_FFMPEG)
+			lists_strs_replace (names, ix, "ffmpeg");
+#elif defined(HAVE_LIBAV)
+			lists_strs_replace (names, ix, "ffmpeg(libav)");
+#else
+			lists_strs_replace (names, ix, "ffmpeg/libav");
+#endif
+	}
+
 	result = lists_strs_fmt (names, " %s");
 	lists_strs_free (names);
 
@@ -406,7 +440,10 @@ static int lt_load_plugin (const char *file, lt_ptr debug_info_ptr)
 {
 	int debug_info;
 	const char *name;
-	plugin_init_func init_func;
+	union {
+		void *data;
+		plugin_init_func *func;
+	} init;
 
 	debug_info = *(int *)debug_info_ptr;
 	name = strrchr (file, '/');
@@ -434,15 +471,17 @@ static int lt_load_plugin (const char *file, lt_ptr debug_info_ptr)
 		return 0;
 	}
 
-	init_func = lt_dlsym (plugins[plugins_num].handle, "plugin_init");
-	if (!init_func) {
+	init.data = lt_dlsym (plugins[plugins_num].handle, "plugin_init");
+	if (!init.data) {
 		fprintf (stderr, "No init function in the plugin!\n");
 		if (lt_dlclose (plugins[plugins_num].handle))
 			fprintf (stderr, "Error unloading plugin: %s\n", lt_dlerror ());
 		return 0;
 	}
 
-	plugins[plugins_num].decoder = init_func ();
+	/* If this call to init.func() fails with memory access or illegal
+	 * instruction errors then read the commit log message for r2831. */
+	plugins[plugins_num].decoder = init.func ();
 	if (!plugins[plugins_num].decoder) {
 		fprintf (stderr, "NULL decoder!\n");
 		if (lt_dlclose (plugins[plugins_num].handle))
@@ -461,12 +500,11 @@ static int lt_load_plugin (const char *file, lt_ptr debug_info_ptr)
 
 	/* Is the Vorbis decoder using Tremor? */
 	if (!strcmp (plugins[plugins_num].name, "vorbis")) {
-		bool (*vorbis_is_tremor)();
+		void *vorbis_has_tremor;
 
-		vorbis_is_tremor = lt_dlsym (plugins[plugins_num].handle,
-		                             "vorbis_is_tremor");
-		if (vorbis_is_tremor)
-			have_tremor = vorbis_is_tremor ();
+		vorbis_has_tremor = lt_dlsym (plugins[plugins_num].handle,
+		                              "vorbis_has_tremor");
+		have_tremor = vorbis_has_tremor != NULL;
 	}
 
 	debug ("Loaded %s decoder", plugins[plugins_num].name);
@@ -712,8 +750,7 @@ void decoder_error (struct decoder_error *error,
 		const enum decoder_error_type type, const int add_errno,
 		const char *format, ...)
 {
-	char errno_buf[256] = "";
-	char err_str[256];
+	char *err_str;
 	va_list va;
 
 	if (error->err)
@@ -722,18 +759,20 @@ void decoder_error (struct decoder_error *error,
 	error->type = type;
 
 	va_start (va, format);
-	vsnprintf (err_str, sizeof(err_str), format, va);
-	err_str[sizeof(err_str)-1] = 0;
-
-	if (add_errno)
-		strerror_r(add_errno, errno_buf, sizeof(errno_buf));
-
-	error->err = (char *)xmalloc (sizeof(char) *
-			(strlen(err_str) + strlen(errno_buf) + 1));
-	strcpy (error->err, err_str);
-	strcat (error->err, errno_buf);
-
+	err_str = format_msg_va (format, va);
 	va_end (va);
+
+	if (add_errno) {
+		char *err_buf;
+
+		err_buf = xstrerror (add_errno);
+		error->err = format_msg ("%s%s", err_str, err_buf);
+		free (err_buf);
+	}
+	else
+		error->err = format_msg ("%s", err_str);
+
+	free (err_str);
 }
 
 /* Initialize the decoder_error structure. */
@@ -758,4 +797,10 @@ void decoder_error_copy (struct decoder_error *dst,
 {
 	dst->type = src->type;
 	dst->err = xstrdup (src->err);
+}
+
+/* Return the error text from the decoder_error variable. */
+const char *decoder_error_text (const struct decoder_error *error)
+{
+	return error->err;
 }

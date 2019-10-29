@@ -20,22 +20,7 @@
 # include "config.h"
 #endif
 
-/* for lrintf() */
-#define _ISOC9X_SOURCE  1
-#define _ISOC99_SOURCE  1
-#define __USE_ISOC9X    1
-#define __USE_ISOC99    1
-
 #include <assert.h>
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
-#endif
-#ifdef HAVE_LIMITS_H
-# include <limits.h>
-#endif
-#ifdef HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
@@ -51,39 +36,9 @@
 #include "audio_conversion.h"
 #include "log.h"
 #include "options.h"
-#include "compat.h"
 
-/* Byte order conversion */
-/* TODO: use functions from byteswap.h if available */
-#define SWAP_INT16(l) ((int16_t) \
-			( (l & 0xff) << 8) | (((l) >> 8) & 0xff))
-#define SWAP_INT32(l) ((int32_t) (\
-			(((l) & 0x000000ff) << 24) | \
-			(((l) & 0x0000ff00) << 8) | \
-			(((l) & 0x00ff0000) >> 8) | \
-			(((l) & 0xff000000) >> 24) \
-			) \
-		)
-
-#if 0
-#ifdef WORDS_BIGENDIAN
-# define INT16_BE_TO_NE(l)	(l)
-# define INT16_LE_TO_NE(l)	SWAP_INT16 (l)
-# define INT32_BE_TO_NE(l)	(l)
-# define INT32_LE_TO_NE(l)	SWAP_INT32 (l)
-#else
-# define INT16_BE_TO_NE(l)	SWAP_INT16 (l)
-# define INT16_LE_TO_NE(l)	(l)
-# define INT32_BE_TO_NE(l)	SWAP_INT32 (l)
-# define INT32_LE_TO_NE(l)	(l)
-#endif
-
-/* The byte order conversion is symetric, so this is true: */
-#define INT16_NE_TO_LE		INT16_LE_TO_NE (l)
-#define INT32_NE_TO_BE		INT32_BE_TO_NE (l)
-#endif
-
-static void float_to_u8 (const float *in, unsigned char *out, const size_t samples)
+static void float_to_u8 (const float *in, unsigned char *out,
+		const size_t samples)
 {
 	size_t i;
 
@@ -97,13 +52,8 @@ static void float_to_u8 (const float *in, unsigned char *out, const size_t sampl
 			out[i] = UINT8_MAX;
 		else if (f <= INT32_MIN)
 			out[i] = 0;
-		else {
-#ifdef HAVE_LRINTF
+		else
 			out[i] = (unsigned int)((lrintf(f) >> 24) - INT8_MIN);
-#else
-			out[i] = (unsigned int)(((int)f >> 24) - INT8_MIN);
-#endif
-		}
 	}
 }
 
@@ -121,13 +71,8 @@ static void float_to_s8 (const float *in, char *out, const size_t samples)
 			out[i] = INT8_MAX;
 		else if (f <= INT32_MIN)
 			out[i] = INT8_MIN;
-		else {
-#ifdef HAVE_LRINTF
+		else
 			out[i] = lrintf(f) >> 24;
-#else
-			out[i] = (int)f >> 24;
-#endif
-		}
 	}
 }
 
@@ -147,18 +92,12 @@ static void float_to_u16 (const float *in, unsigned char *out,
 			*out_val = UINT16_MAX;
 		else if (f <= INT32_MIN)
 			*out_val = 0;
-		else {
-#ifdef HAVE_LRINTF
+		else
 			*out_val = (unsigned int)((lrintf(f) >> 16) - INT16_MIN);
-#else
-			*out_val = (unsigned int)(((int)f >> 16) - INT16_MIN);
-#endif
-		}
 	}
 }
 
-static void float_to_s16 (const float *in, char *out,
-		const size_t samples)
+static void float_to_s16 (const float *in, char *out, const size_t samples)
 {
 	size_t i;
 
@@ -173,13 +112,8 @@ static void float_to_s16 (const float *in, char *out,
 			*out_val = INT16_MAX;
 		else if (f <= INT32_MIN)
 			*out_val = INT16_MIN;
-		else {
-#ifdef HAVE_LRINTF
+		else
 			*out_val = lrintf(f) >> 16;
-#else
-			*out_val = ((int)f >> 16);
-#endif
-		}
 	}
 }
 
@@ -204,18 +138,12 @@ static void float_to_u32 (const float *in, unsigned char *out,
 			*out_val = U32_MAX << 8;
 		else if (f <= S32_MIN)
 			*out_val = 0;
-		else {
-#ifdef HAVE_LRINTF
+		else
 			*out_val = (uint32_t)(lrintf(f) - S32_MIN) << 8;
-#else
-			*out_val = (uint32_t)((int32_t)f - S32_MIN) << 8;
-#endif
-		}
 	}
 }
 
-static void float_to_s32 (const float *in, char *out,
-		const size_t samples)
+static void float_to_s32 (const float *in, char *out, const size_t samples)
 {
 	size_t i;
 
@@ -233,14 +161,9 @@ static void float_to_s32 (const float *in, char *out,
 		if (f >= S32_MAX)
 			*out_val = S32_MAX << 8;
 		else if (f <= S32_MIN)
-			*out_val = S32_MIN << 8;
-		else {
-#ifdef HAVE_LRINTF
+			*out_val = S32_MIN * 256;
+		else
 			*out_val = lrintf(f) << 8;
-#else
-			*out_val = (int32_t)f << 8;
-#endif
-		}
 	}
 }
 
@@ -256,8 +179,7 @@ static void u8_to_float (const unsigned char *in, float *out,
 		out[i] = (((int)*in++) + INT8_MIN) / (float)(INT8_MAX + 1);
 }
 
-static void s8_to_float (const char *in, float *out,
-		const size_t samples)
+static void s8_to_float (const char *in, float *out, const size_t samples)
 {
 	size_t i;
 
@@ -281,8 +203,7 @@ static void u16_to_float (const unsigned char *in, float *out,
 		out[i] = ((int)*in_16++ + INT16_MIN) / (float)(INT16_MAX + 1);
 }
 
-static void s16_to_float (const char *in, float *out,
-		const size_t samples)
+static void s16_to_float (const char *in, float *out, const size_t samples)
 {
 	size_t i;
 	const int16_t *in_16 = (int16_t *)in;
@@ -307,8 +228,7 @@ static void u32_to_float (const unsigned char *in, float *out,
 		out[i] = ((float)*in_32++ + (float)INT32_MIN) / ((float)INT32_MAX + 1.0);
 }
 
-static void s32_to_float (const char *in, float *out,
-		const size_t samples)
+static void s32_to_float (const char *in, float *out, const size_t samples)
 {
 	size_t i;
 	const int32_t *in_32 = (int32_t *)in;
@@ -427,6 +347,7 @@ static void change_sign_8 (uint8_t *buf, const size_t samples)
 	for (i = 0; i < samples; i++)
 		*buf++ ^= 1 << 7;
 }
+
 static void change_sign_16 (uint16_t *buf, const size_t samples)
 {
 	size_t i;
@@ -481,20 +402,20 @@ static void change_sign (char *buf, const size_t size, long *fmt)
 	}
 }
 
-static void int16_bswap_array (int16_t *buf, const size_t num)
+void audio_conv_bswap_16 (int16_t *buf, const size_t num)
 {
 	size_t i;
 
 	for (i = 0; i < num; i++)
-		buf[i] = SWAP_INT16 (buf[i]);
+		buf[i] = bswap_16 (buf[i]);
 }
 
-static void int32_bswap_array (int32_t *buf, const size_t num)
+void audio_conv_bswap_32 (int32_t *buf, const size_t num)
 {
 	size_t i;
 
 	for (i = 0; i < num; i++)
-		buf[i] = SWAP_INT32 (buf[i]);
+		buf[i] = bswap_32 (buf[i]);
 }
 
 /* Swap endianness of fixed point samples. */
@@ -506,11 +427,11 @@ static void swap_endian (char *buf, const size_t size, const long fmt)
 	switch (fmt & SFMT_MASK_FORMAT) {
 		case SFMT_S16:
 		case SFMT_U16:
-			int16_bswap_array ((int16_t *)buf, size / 2);
+			audio_conv_bswap_16 ((int16_t *)buf, size / 2);
 			break;
 		case SFMT_S32:
 		case SFMT_U32:
-			int32_bswap_array ((int32_t *)buf, size / 4);
+			audio_conv_bswap_32 ((int32_t *)buf, size / 4);
 			break;
 		default:
 			error ("Can't convert to native endian!");
@@ -541,7 +462,7 @@ int audio_conv_new (struct audio_conversion *conv,
 #ifdef HAVE_SAMPLERATE
 		int err;
 		int resample_type = -1;
-		char *method = options_get_str ("ResampleMethod");
+		char *method = options_get_symb ("ResampleMethod");
 
 		if (!strcasecmp(method, "SincBestQuality"))
 			resample_type = SRC_SINC_BEST_QUALITY;
@@ -585,8 +506,7 @@ int audio_conv_new (struct audio_conversion *conv,
 
 #ifdef HAVE_SAMPLERATE
 static float *resample_sound (struct audio_conversion *conv, const float *buf,
-		const size_t samples, const int nchannels,
-		size_t *resampled_samples)
+		const size_t samples, const int nchannels, size_t *resampled_samples)
 {
 	SRC_DATA resample_data;
 	float *output;
@@ -601,19 +521,11 @@ static float *resample_sound (struct audio_conversion *conv, const float *buf,
 	resample_data.output_frames = resample_data.input_frames
 		* resample_data.src_ratio;
 
-	if (conv->resample_buf) {
-		conv->resample_buf = (float *)xrealloc (conv->resample_buf,
-				sizeof(float) * resample_data.input_frames
-				* nchannels);
-		new_input_start = conv->resample_buf
-			+ conv->resample_buf_nsamples;
-	}
-	else {
-		conv->resample_buf = (float *)xmalloc (sizeof(float)
-				* resample_data.input_frames
-				* nchannels);
-		new_input_start = conv->resample_buf;
-	}
+	assert (conv->resample_buf || conv->resample_buf_nsamples == 0);
+	conv->resample_buf = xrealloc (conv->resample_buf,
+	                               sizeof(float) * nchannels *
+	                               resample_data.input_frames);
+	new_input_start = conv->resample_buf + conv->resample_buf_nsamples;
 
 	output = (float *)xmalloc (sizeof(float) * resample_data.output_frames
 				* nchannels);
@@ -763,7 +675,7 @@ char *audio_conv (struct audio_conversion *conv, const char *buf,
 	if ((conv->from.rate != conv->to.rate
 				|| (conv->to.fmt & SFMT_MASK_FORMAT) == SFMT_FLOAT
 				|| !sfmt_same_bps(conv->to.fmt, curr_sfmt))
-			&& (conv->from.fmt & SFMT_MASK_FORMAT) != SFMT_FLOAT) {
+			&& (curr_sfmt & SFMT_MASK_FORMAT) != SFMT_FLOAT) {
 		char *new_sound;
 
 		new_sound = (char *)fixed_to_float (curr_sound, *conv_len,
@@ -819,8 +731,7 @@ char *audio_conv (struct audio_conversion *conv, const char *buf,
 	if (conv->from.channels == 1 && conv->to.channels == 2) {
 		char *new_sound;
 
-		new_sound = mono_to_stereo (curr_sound, *conv_len,
-				conv->from.fmt);
+		new_sound = mono_to_stereo (curr_sound, *conv_len, curr_sfmt);
 		*conv_len *= 2;
 
 		if (curr_sound != buf)
@@ -831,7 +742,7 @@ char *audio_conv (struct audio_conversion *conv, const char *buf,
 	return curr_sound;
 }
 
-void audio_conv_destroy (struct audio_conversion *conv ATTR_UNUSED)
+void audio_conv_destroy (struct audio_conversion *conv ASSERT_ONLY)
 {
 	assert (conv != NULL);
 

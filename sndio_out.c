@@ -34,7 +34,7 @@ static struct sound_params params = { 0, 0, 0 };
 
 static void sndio_close ();
 
-static void volume_cb (void *addr ATTR_UNUSED, unsigned vol)
+static void volume_cb (void *unused ATTR_UNUSED, unsigned int vol)
 {
 	curvol = SIO_TO_PCT(vol);
 }
@@ -94,7 +94,7 @@ static int sndio_open (struct sound_params *sound_params)
 	return 1;
 }
 
-/* Return the number of bytes played, or zero on error. */
+/* Return the number of bytes played, or -1 on error. */
 static int sndio_play (const char *buff, const size_t size)
 {
 	int count;
@@ -103,7 +103,7 @@ static int sndio_play (const char *buff, const size_t size)
 
 	count = (int) sio_write (hdl, buff, size);
 	if (!count && sio_eof (hdl))
-		return 0;
+		return -1;
 
 	return count;
 }

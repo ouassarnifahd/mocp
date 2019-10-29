@@ -13,31 +13,44 @@
 # include "config.h"
 #endif
 
+#include <stddef.h>
+#include <sys/types.h>
 #include <assert.h>
 #include <string.h>
 
 #include "common.h"
 #include "fifo_buf.h"
 
-/* Initialize the fifo_buf structure with empty buffer of the given size. */
-void fifo_buf_init (struct fifo_buf *b, const size_t size)
+struct fifo_buf
 {
-	assert (b != NULL);
+	int size;                           /* Size of the buffer */
+	int pos;                            /* Current position */
+	int fill;                           /* Current fill */
+	char buf[];                         /* The buffer content */
+};
+
+/* Initialize and return a new fifo_buf structure of the size requested. */
+struct fifo_buf *fifo_buf_new (const size_t size)
+{
+	struct fifo_buf *b;
+
 	assert (size > 0);
 
-	b->buf = (char *)xmalloc (size);
+	b = xmalloc (offsetof (struct fifo_buf, buf) + size);
+
 	b->size = size;
 	b->pos = 0;
 	b->fill = 0;
+
+	return b;
 }
 
 /* Destroy the buffer object. */
-void fifo_buf_destroy (struct fifo_buf *b)
+void fifo_buf_free (struct fifo_buf *b)
 {
 	assert (b != NULL);
 
-	free (b->buf);
-	b->buf = NULL;
+	free (b);
 }
 
 /* Put data into the buffer. Returns number of bytes actually put. */
@@ -74,15 +87,16 @@ size_t fifo_buf_put (struct fifo_buf *b, const char *data, size_t size)
 
 /* Copy data from the beginning of the buffer to the user buffer. Returns the
  * number of bytes copied. */
-size_t fifo_buf_peek (struct fifo_buf *b, char *user_buf,
-		size_t user_buf_size)
+size_t fifo_buf_peek (struct fifo_buf *b, char *user_buf, size_t user_buf_size)
 {
 	size_t user_buf_pos = 0, written = 0;
-	ssize_t left = b->fill;
-	ssize_t pos = b->pos;
+	ssize_t left, pos;
 
 	assert (b != NULL);
 	assert (b->buf != NULL);
+
+	left = b->fill;
+	pos = b->pos;
 
 	while (left && written < user_buf_size) {
 		size_t to_copy = pos + left <= b->size
@@ -104,8 +118,7 @@ size_t fifo_buf_peek (struct fifo_buf *b, char *user_buf,
 	return written;
 }
 
-size_t fifo_buf_get (struct fifo_buf *b, char *user_buf,
-		size_t user_buf_size)
+size_t fifo_buf_get (struct fifo_buf *b, char *user_buf, size_t user_buf_size)
 {
 	size_t user_buf_pos = 0, written = 0;
 
@@ -132,7 +145,7 @@ size_t fifo_buf_get (struct fifo_buf *b, char *user_buf,
 	return written;
 }
 
-/* Get the amount of free spaace in the buffer. */
+/* Get the amount of free space in the buffer. */
 size_t fifo_buf_get_space (const struct fifo_buf *b)
 {
 	assert (b != NULL);

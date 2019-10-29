@@ -53,7 +53,6 @@ enum key_cmd
 	KEY_CMD_GO_DIR,
 	KEY_CMD_GO_DIR_UP,
 	KEY_CMD_TOGGLE_SHUFFLE,
-	KEY_CMD_NEXT_SEARCH,
 	KEY_CMD_CANCEL,
 	KEY_CMD_GO_URL,
 	KEY_CMD_VOLUME_10,
@@ -130,7 +129,7 @@ enum key_cmd get_key_cmd (const enum key_context context, const struct iface_key
 void keys_init ();
 void keys_cleanup ();
 char **get_keys_help (int *num);
-int key_was_redefined (const enum key_cmd cmd);
+bool is_help_still_h ();
 
 #ifdef __cplusplus
 }

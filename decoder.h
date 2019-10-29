@@ -11,8 +11,8 @@ extern "C" {
 
 /** Version of the decoder API.
  *
- * On every change in the decoder API this number will be changed, so MOC will
- * not load plugins compiled with older/newer decoder.h. */
+ * On every change in the decoder API this number will be changed, so
+ * MOC will not load plugins compiled with older/newer decoder.h. */
 #define DECODER_API_VERSION	7
 
 /** Type of the decoder error. */
@@ -20,14 +20,14 @@ enum decoder_error_type
 {
 	ERROR_OK, /*!< There was no error. */
 	ERROR_STREAM, /*!< Recoverable error in the stream. */
-	ERROR_FATAL /*!< Fatal error in the stream - further decoding can't be
-		      performed. */
+	ERROR_FATAL /*!< Fatal error in the stream - further decoding can't
+		      be performed. */
 };
 
 /** Decoder error.
  *
- * Describes decoder error. Fields don't need to be accessed directly, there are
- * functions to modify/access decoder_error object. */
+ * Describes decoder error. Fields don't need to be accessed directly,
+ * there are functions to modify/access decoder_error object. */
 struct decoder_error
 {
 	enum decoder_error_type type; /*!< Type of the error. */
@@ -37,8 +37,8 @@ struct decoder_error
 /** @struct decoder
  * Functions provided by the decoder plugin.
  *
- * Describes decoder - contains pointers to decoder's functions. If some field
- * is optional, it may have NULL value. */
+ * Describes decoder - contains pointers to decoder's functions. If some
+ * field is optional, it may have NULL value. */
 struct decoder
 {
 	/** API version used by the plugin.
@@ -65,8 +65,8 @@ struct decoder
 	 *
 	 * Open the given resource (file).
 	 *
-	 * \param uri URL to the resource that can be used as the file parameter and return pointer
-	 * to io_open().
+	 * \param uri URL to the resource that can be used as the file parameter
+	 * and return pointer to io_open().
 	 *
 	 * \return Private decoder data. This pointer will be passed to every
 	 * other function that operates on the stream.
@@ -168,12 +168,12 @@ struct decoder
 	/** Get duration of the stream.
 	 *
 	 * Get duration of the stream. It is used as a faster alternative
-	 * for getting duration using info() if the file is opened.
+	 * for getting duration than using info() if the file is opened.
 	 *
 	 * \param data Decoder's private data.
 	 *
 	 * \return Duration in seconds or -1 on error. -1 is not a fatal
-	 * error, further decoding fill be performed.
+	 * error, further decoding will be performed.
 	 */
 	int (*get_duration)(void *data);
 
@@ -212,10 +212,10 @@ struct decoder
 	/** Get a 3-chars format name for a file.
 	 *
 	 * Get an abbreviated format name (up to 3 chars) for a file.
+	 * This function is optional.
 	 *
 	 * \param file File for which we want the format name.
-	 * \param buf Buffer where the format name and ending zero-byte
-	 * must be put.
+	 * \param buf Buffer where the nul-terminated format name may be put.
 	 */
 	void (*get_name)(const char *file, char buf[4]);
 
@@ -235,9 +235,9 @@ struct decoder
 
 	/** Get the IO stream used by the decoder.
 	 *
-	 * Get the pointer to the io_stream object used by the decoder. This is
-	 * used for fast interrupting especially when the stream reads from
-	 * a network. This function is optional.
+	 * Get the pointer to the io_stream object used by the decoder. This
+	 * is used for fast interrupting especially when the stream reads
+	 * from a network. This function is optional.
 	 *
 	 * \param data Decoder's private data.
 	 *
@@ -258,11 +258,11 @@ struct decoder
 
 /** Initialize decoder plugin.
  *
- * Each decoder plugin must export a function name plugin_init of this type.
- * The function must return a pointer to the struct decoder variable filled
- * with pointers to decoder's functions.
+ * Each decoder plugin must export a function name plugin_init of this
+ * type. The function must return a pointer to the struct decoder variable
+ * filled with pointers to decoder's functions.
  */
-typedef struct decoder *(*plugin_init_func)();
+typedef struct decoder *plugin_init_func ();
 
 int is_sound_file (const char *name);
 struct decoder *get_decoder (const char *file);
@@ -283,27 +283,23 @@ char *file_type_name (const char *file);
  *
  * Fills decoder error variable with an error. It can be used like printf().
  *
- * \param error Pointer to the decoder error variable to fill.
+ * \param error Pointer to the decoder_error object to fill.
  * \param type Type of the error.
- * \param add_errno If this value is non-zero, a space and a string describing
- * system error for errno equal to the value of add_errno is appended to the
- * error message.
+ * \param add_errno If this value is non-zero, a space and a string
+ * describing system error for errno equal to the value of add_errno
+ * is appended to the error message.
  * \param format Format, like in the printf() function.
  */
-#ifdef HAVE__ATTRIBUTE__
 void decoder_error (struct decoder_error *error,
 		const enum decoder_error_type type, const int add_errno,
-		const char *format, ...) __attribute__((format (printf, 4, 5)));
-#else
-void decoder_error (struct decoder_error *error,
-		const enum decoder_error_type type, const int add_errno,
-		const char *format, ...);
-#endif
+		const char *format, ...) ATTR_PRINTF(4, 5);
 
 /** Clear decoder_error structure.
  *
  * Clear decoder_error structure. Set the system type to ERROR_OK and
  * the error message to NULL. Frees all memory used by the error's fields.
+ *
+ * \param error Pointer to the decoder_error object to be cleared.
  */
 void decoder_error_clear (struct decoder_error *error);
 
@@ -317,10 +313,23 @@ void decoder_error_clear (struct decoder_error *error);
 void decoder_error_copy (struct decoder_error *dst,
 		const struct decoder_error *src);
 
+/** Return the error text from the decoder_error variable.
+ *
+ * Returns the error text from the decoder_error variable.  NULL may be
+ * returned if decoder_error() has not been called.
+ *
+ * \param error Pointer to the source decoder_error object.
+ *
+ * \return The address of the error text or NULL.
+ */
+const char *decoder_error_text (const struct decoder_error *error);
+
 /** Initialize decoder_error variable.
  *
  * Initialize decoder_error variable and set the error to ERROR_OK with no
  * message.
+ *
+ * \param error Pointer to the decoder_error object to be initialised.
  */
 void decoder_error_init (struct decoder_error *error);
 

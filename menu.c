@@ -13,23 +13,12 @@
 #include "config.h"
 #endif
 
-#define _GNU_SOURCE
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
-
-#ifdef HAVE_NCURSESW_H
-# include <ncursesw/curses.h>
-#elif HAVE_NCURSES_H
-# include <ncurses.h>
-#elif HAVE_CURSES_H
-# include <curses.h>
-#endif
-
 #include <assert.h>
-#include <ctype.h>
 
 #include "common.h"
-#include "compat.h"
 #include "options.h"
 #include "menu.h"
 #include "files.h"
@@ -43,7 +32,7 @@ static void draw_item (const struct menu *menu, const struct menu_item *mi,
 {
 	int title_width, queue_pos_len = 0;
 	int ix, x;
-	int y ATTR_UNUSED;
+	int y ATTR_UNUSED;		/* OpenBSD flags this as unused. */
 	char buf[32];
 
 	assert (menu != NULL);
@@ -127,9 +116,7 @@ static void draw_item (const struct menu *menu, const struct menu_item *mi,
 
 	if (menu->show_time && menu->show_format
 			&& (*mi->time || *mi->format))
-		xwprintw (menu->win, "[%5s|%3s]",
-				mi->time ? mi->time : "	 ",
-				mi->format);
+		xwprintw (menu->win, "[%5s|%3s]", mi->time, mi->format);
 	else if (menu->show_time && mi->time[0])
 		xwprintw (menu->win, "[%5s]", mi->time);
 	else if (menu->show_format && mi->format[0])
@@ -190,7 +177,8 @@ void menu_set_cursor (const struct menu *m)
 		wmove (m->win, m->selected->num - m->top->num + m->posy, m->posx);
 }
 
-static int rb_compare (const void *a, const void *b, void *adata ATTR_UNUSED)
+static int rb_compare (const void *a, const void *b,
+                       const void *unused ATTR_UNUSED)
 {
 	struct menu_item *mia = (struct menu_item *)a;
 	struct menu_item *mib = (struct menu_item *)b;
@@ -199,7 +187,7 @@ static int rb_compare (const void *a, const void *b, void *adata ATTR_UNUSED)
 }
 
 static int rb_fname_compare (const void *key, const void *data,
-		void *adata ATTR_UNUSED)
+                             const void *unused ATTR_UNUSED)
 {
 	const char *fname = (const char *)key;
 	const struct menu_item *mi = (const struct menu_item *)data;
@@ -233,14 +221,14 @@ struct menu *menu_new (WINDOW *win, const int posx, const int posy,
 	menu->height = height;
 	menu->marked = NULL;
 	menu->show_time = 0;
-	menu->show_format = 0;
+	menu->show_format = false;
 	menu->info_attr_normal = A_NORMAL;
 	menu->info_attr_sel = A_NORMAL;
 	menu->info_attr_marked = A_NORMAL;
 	menu->info_attr_sel_marked = A_NORMAL;
 	menu->number_items = 0;
 
-	rb_init_tree (&menu->search_tree, rb_compare, rb_fname_compare, NULL);
+	menu->search_tree = rb_tree_new (rb_compare, rb_fname_compare, NULL);
 
 	return menu;
 }
@@ -283,7 +271,7 @@ struct menu_item *menu_add (struct menu *menu, const char *title,
 		menu->selected = menu->items;
 
 	if (file)
-		rb_insert (&menu->search_tree, (void *)mi);
+		rb_insert (menu->search_tree, (void *)mi);
 
 	menu->last = mi;
 	menu->nitems++;
@@ -384,7 +372,7 @@ void menu_free (struct menu *menu)
 		mi = next;
 	}
 
-	rb_clear (&menu->search_tree);
+	rb_tree_free (menu->search_tree);
 
 	free (menu);
 }
@@ -640,7 +628,7 @@ void menu_set_show_time (struct menu *menu, const int t)
 	menu->show_time = t;
 }
 
-void menu_set_show_format (struct menu *menu, const int t)
+void menu_set_show_format (struct menu *menu, const bool t)
 {
 	assert (menu != NULL);
 
@@ -712,11 +700,11 @@ struct menu_item *menu_find (struct menu *menu, const char *fname)
 	assert (menu != NULL);
 	assert (fname != NULL);
 
-	x = rb_search (&menu->search_tree, fname);
+	x = rb_search (menu->search_tree, fname);
 	if (rb_is_null(x))
 		return NULL;
 
-	return (struct menu_item *)x->data;
+	return (struct menu_item *)rb_get_data (x);
 }
 
 void menu_mark_item (struct menu *menu, const char *file)
@@ -767,7 +755,7 @@ static void menu_delete (struct menu *menu, struct menu_item *mi)
 		menu->top = mi->next ? mi->next : mi->prev;
 
 	if (mi->file)
-		rb_delete (&menu->search_tree, mi->file);
+		rb_delete (menu->search_tree, mi->file);
 
 	menu->nitems--;
 	menu_renumber_items (menu);

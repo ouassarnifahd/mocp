@@ -13,11 +13,7 @@
 # include "config.h"
 #endif
 
-/* _XOPEN_SOURCE is known to break compilation under OpenBSD. */
-#ifndef OPENBSD
-# define _XOPEN_SOURCE  500 /* for wcswidth() */
-#endif
-
+#include <stdio.h>
 #include <stdarg.h>
 
 #ifdef HAVE_ICONV
@@ -30,13 +26,18 @@
 # include <langinfo.h>
 #endif
 
-#ifdef HAVE_NCURSESW_H
+#if defined HAVE_NCURSESW_CURSES_H
 # include <ncursesw/curses.h>
-#elif HAVE_NCURSES_H
+#elif defined HAVE_NCURSESW_H
+# include <ncursesw.h>
+#elif defined HAVE_NCURSES_CURSES_H
+# include <ncurses/curses.h>
+#elif defined HAVE_NCURSES_H
 # include <ncurses.h>
-#else
+#elif defined HAVE_CURSES_H
 # include <curses.h>
 #endif
+
 #include <assert.h>
 #include <string.h>
 #include <errno.h>
@@ -62,7 +63,12 @@ static iconv_t xterm_iconv_desc = (iconv_t)(-1);
 char *iconv_str (const iconv_t desc, const char *str)
 {
 	char buf[512];
-	char *inbuf, *outbuf;
+#ifdef FREEBSD
+	const char *inbuf;
+#else
+	char *inbuf;
+#endif
+	char *outbuf;
 	char *str_copy;
 	size_t inbytesleft, outbytesleft;
 	char *converted;
@@ -72,7 +78,7 @@ char *iconv_str (const iconv_t desc, const char *str)
 	if (desc == (iconv_t)(-1))
 		return xstrdup (str);
 
-	str_copy = inbuf = xstrdup (str);
+	inbuf = str_copy = xstrdup (str);
 	outbuf = buf;
 	inbytesleft = strlen(inbuf);
 	outbytesleft = sizeof(buf) - 1;
@@ -283,11 +289,10 @@ int xwprintw (WINDOW *win, const char *fmt, ...)
 {
 	va_list va;
 	int res;
-	char buf[1024];
+	char *buf;
 
 	va_start (va, fmt);
-	vsnprintf (buf, sizeof(buf), fmt, va);
-	buf[sizeof(buf)-1] = 0;
+	buf = format_msg_va (fmt, va);
 	va_end (va);
 
 	if (using_utf8)
@@ -299,6 +304,8 @@ int xwprintw (WINDOW *win, const char *fmt, ...)
 		free (lstr);
 	}
 
+	free (buf);
+
 	return res;
 }
 
@@ -306,7 +313,7 @@ static void iconv_cleanup ()
 {
 	if (iconv_desc != (iconv_t)(-1)
 			&& iconv_close(iconv_desc) == -1)
-		logit ("iconv_close() failed: %s", strerror(errno));
+		log_errno ("iconv_close() failed", errno);
 }
 
 void utf8_init ()
@@ -322,8 +329,7 @@ void utf8_init ()
 		using_utf8 = 1;
 #else /* HAVE_NCURSESW */
 		terminal_charset = xstrdup ("US-ASCII");
-		logit ("Using US-ASCII conversion - compiled without "
-				"libncursesw");
+		logit ("Using US-ASCII conversion - compiled without libncursesw");
 #endif /* HAVE_NCURSESW */
 	}
 	else
@@ -337,19 +343,14 @@ void utf8_init ()
 	if (!using_utf8 && terminal_charset) {
 		iconv_desc = iconv_open (terminal_charset, "UTF-8");
 		if (iconv_desc == (iconv_t)(-1))
-			logit ("iconv_open() failed: %s", strerror(errno));
+			log_errno ("iconv_open() failed", errno);
 	}
 
-	if (options_get_int ("FileNamesIconv"))
-	{
+	if (options_get_bool ("FileNamesIconv"))
 		files_iconv_desc = iconv_open ("UTF-8", "");
-	}
 
-	if (options_get_int ("NonUTFXterm"))
-	{
+	if (options_get_bool ("NonUTFXterm"))
 		xterm_iconv_desc = iconv_open ("", "UTF-8");
-	}
-
 }
 
 void utf8_cleanup ()

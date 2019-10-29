@@ -16,6 +16,7 @@
 #include "config.h"
 #endif
 
+#include <inttypes.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
@@ -57,9 +58,9 @@ struct musepack_data
 };
 
 #ifdef MPC_IS_OLD_API
-static mpc_int32_t read_callback (void *t, void *buf, mpc_int32_t size)
+static mpc_int32_t read_cb (void *t, void *buf, mpc_int32_t size)
 #else
-static mpc_int32_t read_callback (mpc_reader *t, void *buf, mpc_int32_t size)
+static mpc_int32_t read_cb (mpc_reader *t, void *buf, mpc_int32_t size)
 #endif
 {
 #ifdef MPC_IS_OLD_API
@@ -79,9 +80,9 @@ static mpc_int32_t read_callback (mpc_reader *t, void *buf, mpc_int32_t size)
 }
 
 #ifdef MPC_IS_OLD_API
-static mpc_bool_t seek_callback (void *t, mpc_int32_t offset)
+static mpc_bool_t seek_cb (void *t, mpc_int32_t offset)
 #else
-static mpc_bool_t seek_callback (mpc_reader *t, mpc_int32_t offset)
+static mpc_bool_t seek_cb (mpc_reader *t, mpc_int32_t offset)
 #endif
 {
 #ifdef MPC_IS_OLD_API
@@ -90,15 +91,15 @@ static mpc_bool_t seek_callback (mpc_reader *t, mpc_int32_t offset)
 	struct musepack_data *data = t->data;
 #endif
 
-	debug ("Seek request to %ld", (long)offset);
+	debug ("Seek request to %"PRId32, offset);
 
 	return io_seek(data->stream, offset, SEEK_SET) >= 0 ? 1 : 0;
 }
 
 #ifdef MPC_IS_OLD_API
-static mpc_int32_t tell_callback (void *t)
+static mpc_int32_t tell_cb (void *t)
 #else
-static mpc_int32_t tell_callback (mpc_reader *t)
+static mpc_int32_t tell_cb (mpc_reader *t)
 #endif
 {
 #ifdef MPC_IS_OLD_API
@@ -109,13 +110,13 @@ static mpc_int32_t tell_callback (mpc_reader *t)
 
 	debug ("tell callback");
 
-	return io_tell (data->stream);
+	return (mpc_int32_t)io_tell (data->stream);
 }
 
 #ifdef MPC_IS_OLD_API
-static mpc_int32_t get_size_callback (void *t)
+static mpc_int32_t get_size_cb (void *t)
 #else
-static mpc_int32_t get_size_callback (mpc_reader *t)
+static mpc_int32_t get_size_cb (mpc_reader *t)
 #endif
 {
 #ifdef MPC_IS_OLD_API
@@ -126,13 +127,13 @@ static mpc_int32_t get_size_callback (mpc_reader *t)
 
 	debug ("size callback");
 
-	return io_file_size (data->stream);
+	return (mpc_int32_t)io_file_size (data->stream);
 }
 
 #ifdef MPC_IS_OLD_API
-static mpc_bool_t canseek_callback (void *t)
+static mpc_bool_t canseek_cb (void *t)
 #else
-static mpc_bool_t canseek_callback (mpc_reader *t)
+static mpc_bool_t canseek_cb (mpc_reader *t)
 #endif
 {
 #ifdef MPC_IS_OLD_API
@@ -146,21 +147,18 @@ static mpc_bool_t canseek_callback (mpc_reader *t)
 
 static void musepack_open_stream_internal (struct musepack_data *data)
 {
-
-	data->reader.read = read_callback;
-	data->reader.seek = seek_callback;
-	data->reader.tell = tell_callback;
-	data->reader.get_size = get_size_callback;
-	data->reader.canseek = canseek_callback;
+	data->reader.read = read_cb;
+	data->reader.seek = seek_cb;
+	data->reader.tell = tell_cb;
+	data->reader.get_size = get_size_cb;
+	data->reader.canseek = canseek_cb;
 	data->reader.data = data;
 
 #ifdef MPC_IS_OLD_API
 	mpc_streaminfo_init (&data->info);
 
 	if (mpc_streaminfo_read(&data->info, &data->reader) != ERROR_CODE_OK) {
-		decoder_error (&data->error, ERROR_FATAL, 0,
-				"Not a valid MPC file.");
-		io_close (data->stream);
+		decoder_error (&data->error, ERROR_FATAL, 0, "Not a valid MPC file.");
 		return;
 	}
 
@@ -169,15 +167,12 @@ static void musepack_open_stream_internal (struct musepack_data *data)
 	if (!mpc_decoder_initialize(&data->decoder, &data->info)) {
 		decoder_error (&data->error, ERROR_FATAL, 0,
 				"Can't initialize mpc decoder.");
-		io_close (data->stream);
 		return;
 	}
 #else
 	data->demux = mpc_demux_init (&data->reader);
 	if (!data->demux) {
-		decoder_error (&data->error, ERROR_FATAL, 0,
-				"Not a valid MPC file.");
-		io_close (data->stream);
+		decoder_error (&data->error, ERROR_FATAL, 0, "Not a valid MPC file.");
 		return;
 	}
 
@@ -204,12 +199,17 @@ static void *musepack_open (const char *file)
 	data->stream = io_open (file, 1);
 	if (!io_ok(data->stream)) {
 		decoder_error (&data->error, ERROR_FATAL, 0,
-				"Can't open file: %s",
-				io_strerror(data->stream));
-		io_close (data->stream);
+				"Can't open file: %s", io_strerror(data->stream));
+		return data;
 	}
-	else
-		musepack_open_stream_internal (data);
+
+	/* This a restriction placed on us by the Musepack API. */
+	if (io_file_size (data->stream) > INT32_MAX) {
+		decoder_error (&data->error, ERROR_FATAL, 0, "File too large!");
+		return data;
+	}
+
+	musepack_open_stream_internal (data);
 
 	return data;
 }
@@ -232,16 +232,15 @@ static void musepack_close (void *prv_data)
 {
 	struct musepack_data *data = (struct musepack_data *)prv_data;
 
-#ifndef MPC_IS_OLD_API
-	mpc_demux_exit (data->demux);
-#endif
-
 	if (data->ok) {
-		io_close (data->stream);
+#ifndef MPC_IS_OLD_API
+		mpc_demux_exit (data->demux);
+#endif
 		if (data->remain_buf)
 			free (data->remain_buf);
 	}
 
+	io_close (data->stream);
 	decoder_error_clear (&data->error);
 	free (data);
 }
@@ -334,10 +333,10 @@ static int musepack_decode (void *prv_data, char *buf, int buf_len,
 #endif
 	float decode_buf[MPC_DECODER_BUFFER_LENGTH];
 	if (data->remain_buf) {
-		size_t to_copy = MIN((unsigned)buf_len,
+		size_t to_copy = MIN((unsigned int)buf_len,
 				data->remain_buf_len * sizeof(float));
 
-		debug ("Copying %ld bytes from the remain buf", (long)to_copy);
+		debug ("Copying %zu bytes from the remain buf", to_copy);
 
 		memcpy (buf, data->remain_buf, to_copy);
 		if (to_copy / sizeof(float) < data->remain_buf_len) {
@@ -364,8 +363,7 @@ static int musepack_decode (void *prv_data, char *buf, int buf_len,
 	}
 
 	if (ret < 0) {
-		decoder_error (&data->error, ERROR_FATAL, 0,
-				"Error in the stream!");
+		decoder_error (&data->error, ERROR_FATAL, 0, "Error in the stream!");
 		return 0;
 	}
 
@@ -375,18 +373,23 @@ static int musepack_decode (void *prv_data, char *buf, int buf_len,
 	do {
 		frame.buffer = decode_buf;
 		err = mpc_demux_decode (data->demux, &frame);
-		if (err != MPC_STATUS_OK) {
-			if (frame.bits == -1) {
-				decoder_error (&data->error, ERROR_FATAL, 0,
-						"Error in the stream!");
-				return 0;
-			}
 
-			decoder_error (&data->error, ERROR_STREAM, 0,
-					"Broken frame.");
+		if (err == MPC_STATUS_OK && frame.bits == -1) {
+			debug ("EOF");
+			return 0;
 		}
 
-	} while (err != MPC_STATUS_OK);
+		if (err == MPC_STATUS_OK)
+			continue;
+
+		if (frame.bits == -1) {
+			decoder_error (&data->error, ERROR_FATAL, 0,
+			               "Error in the stream!");
+			return 0;
+		}
+
+		decoder_error (&data->error, ERROR_STREAM, 0, "Broken frame.");
+	} while (err != MPC_STATUS_OK || frame.samples == 0);
 
 	mpc_demux_get_info (data->demux, &data->info);
 	bytes_from_decoder = frame.samples * sizeof(MPC_SAMPLE_FORMAT) * data->info.channels;
@@ -401,7 +404,7 @@ static int musepack_decode (void *prv_data, char *buf, int buf_len,
 	if (bytes_from_decoder >= buf_len) {
 		size_t to_copy = MIN (buf_len, bytes_from_decoder);
 
-		debug ("Copying %ld bytes", (long)to_copy);
+		debug ("Copying %zu bytes", to_copy);
 
 		memcpy (buf, decode_buf, to_copy);
 		data->remain_buf_len = (bytes_from_decoder - to_copy)
@@ -413,8 +416,7 @@ static int musepack_decode (void *prv_data, char *buf, int buf_len,
 		decoded = to_copy;
 	}
 	else {
-		debug ("Copying whole decoded sound (%ld bytes)",
-				(long)bytes_from_decoder);
+		debug ("Copying whole decoded sound (%d bytes)", bytes_from_decoder);
 		memcpy (buf, decode_buf, bytes_from_decoder);
 		decoded = bytes_from_decoder;
 	}
@@ -450,7 +452,7 @@ static struct io_stream *musepack_get_stream (void *prv_data)
 	return data->stream;
 }
 
-static void musepack_get_name (const char *file ATTR_UNUSED, char buf[4])
+static void musepack_get_name (const char *unused ATTR_UNUSED, char buf[4])
 {
 	strcpy (buf, "MPC");
 }

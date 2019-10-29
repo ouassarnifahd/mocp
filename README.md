@@ -1,15 +1,86 @@
-                                 MOC
-                      m u s i c  o n  c o n s o l e
+# MOC: Music on Console
 
-                          http://moc.daper.net/
+  http://moc.daper.net
+
+![Screenshot](themes/transparent-background_screenshot_thumb.png?raw=true)
 
 
---------------------------------------------------------------------------------
+
 What Is It?
 --------------------------------------------------------------------------------
 
-MOC (music on console) is a console audio player for LINUX/UNIX designed to be
+MOC (music on console) is a console audio player for Linux/Unix designed to be
 powerful and easy to use.
+
+This is an unofficial mirror, with a few small aesthetic tweaks.  It syncs with 
+the subversion upstream every few weeks.
+MOC makes it easy to use multimedia keys on your keyboard, which is discussed below.  
+
+Prerequisites
+-------------
+On Debian/Ubuntu systems, you minimally need the following packages:
+```Bash
+sudo apt-get install gcc autoconf libtool gettext libdb-dev libpopt-dev libncursesw5-dev
+```
+I recommend the following packages as well:
+```Bash
+sudo apt-get install libasound2-dev libcurl4-openssl-dev libogg-dev libvorbis-dev libflac-dev libopus-dev libid3tag0-dev libsndfile1-dev libfaad-dev libavcodec-dev libsamplerate0-dev librcc-dev
+```
+**Optional**: FFmpeg adds many, many more file formats, including AAC, Opus, MP4, and WMA. You may need to first add www.deb-multimedia.org to your apt-get sources.  Then get FFmpeg:
+```Bash
+sudo apt-get install libavformat-dev
+```
+
+Compilation
+-----------
+```Bash
+autoreconf -if
+./configure
+make -j 2
+sudo make install
+```
+
+Keyboard Shortcuts
+------------------
+For Xfce, go to `Settings -> Keyboard -> Application Shortcuts`, then add shortcuts with
+commands like `mocp --next` and others listed in `mocp --help`.  I find that the most
+useful keyboard shortcuts are for the following:
+
+* `mocp --toggle-pause` - Play/pause
+* `mocp --toggle shuffle` - Enable/disable shuffle
+* `mocp --next` - Skip to the next song
+* `mocp --previous` - Go to the previous song
+* `mocp --seek +5` - Jump 5 seconds forward
+* `mocp --seek -5` - Jump 5 seconds back
+
+In Fluxbox you can add the following to your `.fluxbox/keys` file (after using `xev`
+to discover key numbers):
+
+```bash
+# Play/pause
+179 :Exec mocp --toggle-pause
+# Skip to next song
+225 :Exec mocp --next
+# Go to previous song
+Mod1 225 :Exec mocp --previous
+# Move forward a few seconds: ALT + >
+Mod1 60 :Exec mocp --seek +5
+# Move backward a few seconds: ALT + <
+Mod1 59 :Exec mocp --seek -5
+# Go to MOCP tab (should be first tab)
+128 :Tab 1
+# Toggle shuffle
+152 :Exec mocp --toggle shuffle
+``` 
+
+Remote Controls
+---------------
+It's really easy to use a remote control with MOC.  You can use any remote that appears to your computer as a keyboard, like [this one](https://smile.amazon.com/dp/B01MSX306Z) or similar ones.  Then setup keyboard shortcuts as described above for each button you want to use to control MOC.
+
+
+Original Text
+-------------
+The rest of the upstream README is as follows:
 
 You just need to select a file from some directory using the menu similar to
 Midnight Commander, and MOC will start playing all files in this directory
@@ -46,7 +117,7 @@ Other features:
   - User defined keys
   - Cache for files' tags
 
---------------------------------------------------------------------------------
+
 Documentation and The MOC Forum
 --------------------------------------------------------------------------------
 
@@ -55,7 +126,7 @@ available on the home page (http://moc.daper.net/documentation).
 
 You can also find a discussion forum on the MOC home page.
 
---------------------------------------------------------------------------------
+
 What Software Is Required To Build It?
 --------------------------------------------------------------------------------
 
@@ -79,26 +150,26 @@ You should choose which of the following audio formats you wish to play and
 provide the libraries needed to support them:
 
   - AAC - libfaad2 version 2.7 (http://www.audiocoding.com/), and
-          libid3tag (http://www.underbit.com/products/mad/)
+    libid3tag (http://www.underbit.com/products/mad/)
   - FLAC - libFLAC version 1.1.3 (http://flac.sourceforge.net/)
   - MIDI - libtimidity version 0.1 (http://timidity.sourceforge.net/)
   - modplug - libmodplug version 0.7 (http://modplug-xmms.sourceforge.net/)
   - MP3 - libmad with libid3tag (ftp://ftp.mars.org/pub/mpeg/)
-  - Musepack (mpc) - libmpc (http://www.musepack.net/), and
-                   - taglib version 1.3.1
-                     (http://developer.kde.org/~wheeler/taglib.html)
-  - Ogg Vorbis - libvorbis, libogg and libvorbisfile (all version 1.0)
-                 (http://www.xiph.org/ogg/), or
-               - libvorbisidec and libogg (both version 1.0)
-                 (http://svn.xiph.org/trunk/Tremor)
+  - Musepack (mpc)
+    - libmpcdec (http://www.musepack.net/), and
+    - taglib version 1.3.1 (http://developer.kde.org/~wheeler/taglib.html)
+  - Ogg Vorbis
+    - libvorbis, libogg and libvorbisfile (all version 1.0) (http://www.xiph.org/ogg/), or
+    - libvorbisidec and libogg (both version 1.0) (http://svn.xiph.org/trunk/Tremor)
   - SID - libsidplay2 version 2.1.1 and libsidutils version 1.0.4
-          (http://sidplay2.sourceforge.net/)
-  - Speex - libspeex version 1.0 (http://www.speex.org/), and
-          - libogg version 1.0 (http://www.xiph.org/ogg/)
-  - WMA, RealAudio (.ra), MP4 - FFmpeg version 1.0 (http://www.ffmpeg.org/), or
-                              - LibAV version 10.0 (http://www.libav.org/)
-  - WAVE, AU, AIFF, SVX, SPH, IRC, VOC - libsndfile version 1.0
-                                         (http://www.mega-nerd.com/libsndfile/)
+    (http://sidplay2.sourceforge.net/)
+  - Speex
+    - libspeex version 1.0 (http://www.speex.org/), and
+    - libogg version 1.0 (http://www.xiph.org/ogg/)
+  - WMA, RealAudio (.ra), MP4
+    - FFmpeg version 0.7 (http://www.ffmpeg.org/), or
+    - LibAV version 0.7 (http://www.libav.org/)
+  - WAVE, AU, AIFF, SVX, SPH, IRC, VOC - libsndfile version 1.0 (http://www.mega-nerd.com/libsndfile/)
   - wavpack - libwavpack version 4.31 (http://www.wavpack.com/)
 
 For interfacing to the sound sub-system, you will need libraries for one or
@@ -107,8 +178,7 @@ more of the following:
   - ALSA - alsa-lib version 1.0.11 (http://www.alsa-project.org/)
   - OSS - the OSS libraries (http://www.opensound.com/)
   - BSD's SNDIO - SNDIO libraries
-  - JACK low-latency audio server - JACK version 0.4
-                                    (http://jackit.sourceforge.net/)
+  - JACK low-latency audio server - JACK version 0.4 (http://jackit.sourceforge.net/)
 
 For network streams:
 
@@ -121,7 +191,7 @@ hardware):
 
 For librcc (fixes encoding in broken mp3 tags):
 
-  - http://rusxmms.sourceforge.net/
+  - http://rusxmms.sourceforge.net
 
 Note that for Debian-based distributions, you will also require any '-dev'
 suffixed versions of the packages above if building from source.
@@ -131,7 +201,7 @@ work.  However, MOC may not yet have caught up with the very latest changes
 to library interfaces and these may cause problems if they break backwards
 compatibility.
 
---------------------------------------------------------------------------------
+
 On Which Systems Is MOC Running?
 --------------------------------------------------------------------------------
 
@@ -144,31 +214,31 @@ reports of such breakage are welcome.
 
 There is no intention to support MOC on MS-Windows (so please don't ask).
 
---------------------------------------------------------------------------------
+
 How Do I Verify the Authenticity of the Tarball?
 --------------------------------------------------------------------------------
 
 If you downloaded the official MOC distribution you should have the
 following files:
 
-	moc-2.6-alpha3.tar.asc
-	moc-2.6-alpha3.tar.md5
-	moc-2.6-alpha3.tar.xz
+	moc-2.6-alpha2.tar.asc
+	moc-2.6-alpha2.tar.md5
+	moc-2.6-alpha2.tar.xz
 
 would check the integrity of the download:
 
-	md5sum -c moc-2.6-alpha3.tar.md5
+	md5sum -c moc-2.6-alpha2.tar.md5
 
 and then verify the tarball thusly:
 
-	xzcat moc-2.6-alpha3.tar.xz | gpg --verify moc-2.6-alpha3.tar.asc -
+	xzcat moc-2.6-alpha2.tar.xz | gpg --verify moc-2.6-alpha2.tar.asc -
 
-The signature file (*.asc) was made against the uncompressed tarball,
+The signature file (\*.asc) was made against the uncompressed tarball,
 so if the tarball you have has been recompressed using a tool other
 than XZ then uncompress it using the appropriate tool then verify that:
 
-	gunzip moc-2.6-alpha3.tar.gz
-	gpg --verify moc-2.6-alpha3.tar.asc
+	gunzip moc-2.6-alpha2.tar.gz
+	gpg --verify moc-2.6-alpha2.tar.asc
 
 If the tool can output to stdout (and most can) then you can also verify
 verify it in a single step similar to the way in which the XZ tarball
@@ -182,7 +252,7 @@ for which the fingerprint is:
 
 	5935 9B80 406D 9E73 E805  99BE F312 1E4F 2885 A7AA
 
---------------------------------------------------------------------------------
+
 How Do I Build and Install It?
 --------------------------------------------------------------------------------
 
@@ -248,7 +318,7 @@ wish to do:
 	make install
 	bin/mocp -M .moc
 
---------------------------------------------------------------------------------
+
 How Do I Use It?
 --------------------------------------------------------------------------------
 
@@ -260,7 +330,7 @@ Commander.
 You can use a configuration file placed in ~/.moc/config, but it's not required.
 See config.example provided with MOC.
 
---------------------------------------------------------------------------------
+
 Using Themes
 --------------------------------------------------------------------------------
 
@@ -277,14 +347,13 @@ manpage and the example configuration file).
 
 Feel free to share the themes you have created.
 
---------------------------------------------------------------------------------
+
 Defining Keys
 --------------------------------------------------------------------------------
 
-You can redefine standard keys.  See the instructions in the keymap.example
-file.
+You can redefine standard keys.  See the instructions in the keymap.example file.
 
---------------------------------------------------------------------------------
+
 How Do I Report A Problem?
 --------------------------------------------------------------------------------
 
@@ -330,7 +399,7 @@ If you do not do those two things (and don't offer a good explanation as to
 why you didn't) your problem report is likely to be ignored until such time
 as you do.
 
---------------------------------------------------------------------------------
+
 Hacking
 --------------------------------------------------------------------------------
 
@@ -361,15 +430,11 @@ with the MOC Maintainer once you've clarified your ideas but before spending
 too much time implementing them; it will be more productive if your work fits
 with MOC's future direction.
 
---------------------------------------------------------------------------------
+
 Who Wrote It?  Where Can I Send Bug Reports, Questions or Comments?
 --------------------------------------------------------------------------------
 
-	* Original author is Damian Pietras
-	* Current maintainer is John Fitzgerald
-	* For comments and questions see the official forum:
-	              http://moc.daper.net/forum
-	* Need to report a bug?  You can reach the maintainer(s) at:
-	                 <mocmaint@daper.net>
-
---------------------------------------------------------------------------------
+- Original author is Damian Pietras
+- Current maintainer is John Fitzgerald
+- For comments and questions see the official forum: http://moc.daper.net/forum
+- Need to report a bug?  You can reach the maintainer(s) at: <mocmaint@daper.net>

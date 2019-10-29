@@ -18,12 +18,7 @@
 
 #include <string.h>
 #include <strings.h>
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
-#endif
-#ifdef HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
+#include <inttypes.h>
 #include <assert.h>
 #include <speex/speex.h>
 #include <speex/speex_header.h>
@@ -35,6 +30,7 @@
 
 #include "common.h"
 #include "decoder.h"
+#include "io.h"
 #include "audio.h"
 #include "log.h"
 
@@ -87,8 +83,8 @@ static void *process_header (struct spx_data *data)
 
 	if (data->header->mode >= SPEEX_NB_MODES) {
 		decoder_error (&data->error, ERROR_FATAL, 0,
-				"Can't open speex file: Mode number %d does "
-				"not (any longer) exist in this version",
+				"Can't open speex file: Mode number %"PRId32
+				" does not exist in this version",
 				data->header->mode);
 		return NULL;
 	}
@@ -129,7 +125,7 @@ static int read_speex_header (struct spx_data *data)
 	int packet_count = 0;
 	int stream_init = 0;
 	char *buf;
-	int nb_read;
+	ssize_t nb_read;
 	int header_packets = 2;
 
 	while (packet_count < header_packets) {
@@ -168,8 +164,7 @@ static int read_speex_header (struct spx_data *data)
 			ogg_stream_pagein (&data->os, &data->og);
 
 			/* Extract all available packets FIXME: EOS! */
-			while (ogg_stream_packetout(&data->os, &data->op)
-					== 1) {
+			while (ogg_stream_packetout(&data->os, &data->op) == 1) {
 
 				/* If first packet, process as Speex header */
 				if (packet_count == 0) {
@@ -258,12 +253,11 @@ static void *spx_open (const char *file)
 		data = spx_open_internal (stream);
 	else {
 		data = (struct spx_data *)xmalloc (sizeof(struct spx_data));
-		data->stream = NULL;
+		data->stream = stream;
+		data->header = NULL;
 		decoder_error_init (&data->error);
 		decoder_error (&data->error, ERROR_STREAM, 0,
-				"Can't open file: %s",
-				io_strerror(stream));
-        io_close (stream);
+				"Can't open file: %s", io_strerror(stream));
 		data->ok = 0;
 	}
 
@@ -277,7 +271,7 @@ static void *spx_open_stream (struct io_stream *stream)
 
 static int spx_can_decode (struct io_stream *stream)
 {
-	char buf [36];
+	char buf[36];
 
 	if (io_peek(stream, buf, 36) == 36 && !memcmp(buf, "OggS", 4)
 			&& !memcmp(buf + 28, "Speex   ", 8))
@@ -375,12 +369,7 @@ static void get_comments (struct spx_data *data, struct file_tags *tags)
 
 			if (temp_len < len + 1) {
 				temp_len = len + 1;
-				if (temp)
-					temp = xrealloc (temp, sizeof(char) *
-							temp_len);
-				else
-					temp = xmalloc (sizeof(char) *
-							temp_len);
+				temp = xrealloc (temp, temp_len);
 			}
 
 			strncpy (temp, c, len);
@@ -396,9 +385,19 @@ static void get_comments (struct spx_data *data, struct file_tags *tags)
 	}
 }
 
+static void get_more_data (struct spx_data *data)
+{
+	char *buf;
+	ssize_t nb_read;
+
+	buf = ogg_sync_buffer (&data->oy, 200);
+	nb_read = io_read (data->stream, buf, 200);
+	ogg_sync_wrote (&data->oy, nb_read);
+}
+
 static int count_time (struct spx_data *data)
 {
-	unsigned long last_granulepos = 0;
+	ogg_int64_t last_granulepos = 0;
 
 	/* Seek to somewhere near the last page */
 	if (io_file_size(data->stream) > 10000) {
@@ -413,18 +412,14 @@ static int count_time (struct spx_data *data)
 
 		/* Sync to page and read it */
 		while (!io_eof(data->stream)) {
-			char *buf;
-			int nb_read;
-
 			if (ogg_sync_pageout(&data->oy, &data->og) == 1) {
 				debug ("Sync");
 				break;
 			}
-			else if (!io_eof(data->stream)) {
+
+			if (!io_eof(data->stream)) {
 				debug ("Need more data");
-				buf = ogg_sync_buffer (&data->oy, 200);
-				nb_read = io_read (data->stream, buf, 200);
-				ogg_sync_wrote (&data->oy, nb_read);
+				get_more_data (data);
 			}
 		}
 
@@ -461,11 +456,10 @@ static void spx_info (const char *file_name, struct file_tags *tags,
 		io_close (s);
 }
 
-static int spx_seek (void *prv_data ATTR_UNUSED, int sec)
+static int spx_seek (void *prv_data, int sec)
 {
 	struct spx_data *data = (struct spx_data *)prv_data;
-	ssize_t begin = 0, end;
-	size_t old_pos;
+	off_t begin = 0, end, old_pos;
 
 	assert (sec >= 0);
 
@@ -477,11 +471,11 @@ static int spx_seek (void *prv_data ATTR_UNUSED, int sec)
 	debug ("Seek request to %ds", sec);
 
 	while (1) {
-		ssize_t middle = (end + begin) / 2;
-		size_t granule_pos;
+		off_t middle = (end + begin) / 2;
+		ogg_int64_t granule_pos;
 		int position_seconds;
 
-		debug ("Seek to %ld", (long)middle);
+		debug ("Seek to %"PRId64, middle);
 
 		if (io_seek(data->stream, middle, SEEK_SET) == -1) {
 			io_seek (data->stream, old_pos, SEEK_SET);
@@ -495,18 +489,14 @@ static int spx_seek (void *prv_data ATTR_UNUSED, int sec)
 		/* Sync to page and read it */
 		ogg_sync_reset (&data->oy);
 		while (!io_eof(data->stream)) {
-			char *buf;
-			int nb_read;
-
 			if (ogg_sync_pageout(&data->oy, &data->og) == 1) {
 				debug ("Sync");
 				break;
 			}
-			else if (!io_eof(data->stream)) {
+
+			if (!io_eof(data->stream)) {
 				debug ("Need more data");
-				buf = ogg_sync_buffer (&data->oy, 200);
-				nb_read = io_read (data->stream, buf, 200);
-				ogg_sync_wrote (&data->oy, nb_read);
+				get_more_data (data);
 			}
 		}
 
@@ -522,8 +512,7 @@ static int spx_seek (void *prv_data ATTR_UNUSED, int sec)
 
 		if (position_seconds == sec) {
 			ogg_stream_pagein (&data->os, &data->og);
-			debug ("We have it at granulepos %ld",
-					(long)granule_pos);
+			debug ("We have it at granulepos %"PRId64, granule_pos);
 			break;
 		}
 		else if (sec < position_seconds) {
@@ -535,7 +524,7 @@ static int spx_seek (void *prv_data ATTR_UNUSED, int sec)
 			debug ("going forward");
 		}
 
-		debug ("begin - end %ld - %ld", (long)begin, (long)end);
+		debug ("begin - end %"PRId64" - %"PRId64, begin, end);
 
 		if (end - begin <= 200) {
 
@@ -563,8 +552,7 @@ static int spx_decode (void *prv_data, char *sound_buf, int nbytes,
 	sound_params->fmt = SFMT_S16 | SFMT_NE;
 
 	while (nbytes) {
-		char *buf;
-		int j, nb_read;
+		int j;
 
 		/* First see if there is anything left in the output buffer and
 		 * empty it out */
@@ -621,22 +609,12 @@ static int spx_decode (void *prv_data, char *sound_buf, int nbytes,
 
 			/* Read in another ogg page */
 			ogg_stream_pagein (&data->os, &data->og);
-			debug ("Granulepos: %d", (int)ogg_page_granulepos(&data->og));
+			debug ("Granulepos: %"PRId64, ogg_page_granulepos(&data->og));
 
 		}
 		else if (!io_eof(data->stream)) {
-
-			/* Finally, pull in some more data and try again on the
-			 * next pass */
-
-			/* Get the ogg buffer for writing */
-			buf = ogg_sync_buffer (&data->oy, 200);
-
-			/* Read bitstream from input file */
-			nb_read = io_read (data->stream, buf, 200);
-
-			ogg_sync_wrote (&data->oy, nb_read);
-			/*data->bytes_read += nb_read;*/
+			/* Finally, pull in some more data and try again on the next pass */
+			get_more_data (data);
 		}
 		else
 			break;
@@ -661,7 +639,7 @@ static int spx_get_bitrate (void *prv_data)
 	return data->bitrate / 1000;
 }
 
-static int spx_get_duration (void *prv_data ATTR_UNUSED)
+static int spx_get_duration (void *unused ATTR_UNUSED)
 {
 	/*struct spx_data *data = (struct spx_data *)prv_data;*/
 
@@ -675,7 +653,7 @@ static struct io_stream *spx_get_stream (void *prv_data)
 	return data->stream;
 }
 
-static void spx_get_name (const char *file ATTR_UNUSED, char buf[4])
+static void spx_get_name (const char *unused ATTR_UNUSED, char buf[4])
 {
 	strcpy (buf, "SPX");
 }

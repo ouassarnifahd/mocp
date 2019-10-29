@@ -17,13 +17,17 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <strings.h>
 #include <ctype.h>
 #include <assert.h>
 #include <unistd.h>
+#include <time.h>
 #include <sys/types.h>
 #include <pwd.h>
+#include <pthread.h>
+#include <signal.h>
 #include <errno.h>
 #ifdef HAVE_SYSLOG
 #include <syslog.h>
@@ -38,35 +42,39 @@
 
 static int im_server = 0; /* Am I the server? */
 
-void error (const char *format, ...)
+void internal_error (const char *file, int line, const char *function,
+                     const char *format, ...)
 {
+	int saved_errno = errno;
 	va_list va;
-	char msg[256];
+	char *msg;
 
 	va_start (va, format);
-	vsnprintf (msg, sizeof(msg), format, va);
-	msg[sizeof(msg) - 1] = 0;
+	msg = format_msg_va (format, va);
 	va_end (va);
 
 	if (im_server)
-		server_error (msg);
+		server_error (file, line, function, msg);
 	else
 		interface_error (msg);
+
+	free (msg);
+
+	errno = saved_errno;
 }
 
 /* End program with a message. Use when an error occurs and we can't recover.
  * If we're the server, then also log the message to the system log. */
-void internal_fatal (const char *file ATTR_UNUSED, int line ATTR_UNUSED,
-                 const char *function ATTR_UNUSED, const char *format, ...)
+void internal_fatal (const char *file LOGIT_ONLY, int line LOGIT_ONLY,
+                 const char *function LOGIT_ONLY, const char *format, ...)
 {
 	va_list va;
-	char msg[256];
+	char *msg;
 
 	windows_reset ();
 
 	va_start (va, format);
-	vsnprintf (msg, sizeof(msg), format, va);
-	msg[sizeof(msg) - 1] = 0;
+	msg = format_msg_va (format, va);
 	fprintf (stderr, "\nFATAL_ERROR: %s\n\n", msg);
 #ifndef NDEBUG
 	internal_logit (file, line, function, "FATAL ERROR: %s", msg);
@@ -79,6 +87,8 @@ void internal_fatal (const char *file ATTR_UNUSED, int line ATTR_UNUSED,
 	if (im_server)
 		syslog (LOG_USER|LOG_ERR, "%s", msg);
 #endif
+
+	free (msg);
 
 	exit (EXIT_FATAL);
 }
@@ -109,10 +119,11 @@ void *xrealloc (void *ptr, const size_t size)
 {
 	void *p;
 
-	if ((p = realloc(ptr, size)) == NULL && size != 0)
+	p = realloc (ptr, size);
+	if (!p && size != 0)
 		fatal ("Can't allocate memory!");
-	return p;
 
+	return p;
 }
 
 char *xstrdup (const char *s)
@@ -123,6 +134,100 @@ char *xstrdup (const char *s)
 		fatal ("Can't allocate memory!");
 
 	return s ? n : NULL;
+}
+
+/* Sleep for the specified number of 'ticks'. */
+void xsleep (size_t ticks, size_t ticks_per_sec)
+{
+	assert(ticks_per_sec > 0);
+
+	if (ticks > 0) {
+		int rc;
+		struct timespec delay = {.tv_sec = ticks};
+
+		if (ticks_per_sec > 1) {
+			uint64_t nsecs;
+
+			delay.tv_sec /= ticks_per_sec;
+			nsecs = ticks % ticks_per_sec;
+
+			if (nsecs > 0) {
+				assert (nsecs < UINT64_MAX / UINT64_C(1000000000));
+
+				delay.tv_nsec = nsecs * UINT64_C(1000000000);
+				delay.tv_nsec /= ticks_per_sec;
+			}
+		}
+
+		do {
+			rc = nanosleep (&delay, &delay);
+			if (rc == -1 && errno != EINTR)
+				fatal ("nanosleep() failed: %s", xstrerror (errno));
+		} while (rc != 0);
+	}
+}
+
+#if !HAVE_DECL_STRERROR_R
+static pthread_mutex_t xstrerror_mtx = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
+#if !HAVE_DECL_STRERROR_R
+/* Return error message in malloc() buffer (for strerror(3)). */
+char *xstrerror (int errnum)
+{
+	char *result;
+
+	/* The client is not threaded. */
+	if (!im_server)
+		return xstrdup (strerror (errnum));
+
+	LOCK (xstrerror_mtx);
+
+	result = xstrdup (strerror (errnum));
+
+	UNLOCK (xstrerror_mtx);
+
+	return result;
+}
+#endif
+
+#if HAVE_DECL_STRERROR_R
+/* Return error message in malloc() buffer (for strerror_r(3)). */
+char *xstrerror (int errnum)
+{
+	int saved_errno = errno;
+	char *err_str, err_buf[256];
+
+#ifdef STRERROR_R_CHAR_P
+	/* strerror_r(3) is GNU variant. */
+	err_str = strerror_r (errnum, err_buf, sizeof (err_buf));
+#else
+	/* strerror_r(3) is XSI variant. */
+	if (strerror_r (errnum, err_buf, sizeof (err_buf)) < 0) {
+		logit ("Error %d occurred obtaining error description for %d",
+		        errno, errnum);
+		strcpy (err_buf, "Error occurred obtaining error description");
+	}
+	err_str = err_buf;
+#endif
+
+	errno = saved_errno;
+
+	return xstrdup (err_str);
+}
+#endif
+
+/* A signal(2) which is both thread safe and POSIXly well defined. */
+void xsignal (int signum, void (*func)(int))
+{
+	struct sigaction act;
+
+	act.sa_handler = func;
+	act.sa_flags = 0;
+	sigemptyset (&act.sa_mask);
+
+	if (sigaction(signum, &act, 0) == -1)
+		fatal ("sigaction() failed: %s", xstrerror (errno));
 }
 
 void set_me_server ()
@@ -138,17 +243,22 @@ char *str_repl (char *target, const char *oldstr, const char *newstr)
 	size_t target_max = target_len;
 	size_t s, p;
 	char *needle;
-	for (s = 0; (needle = strstr(target + s, oldstr)) != NULL; s = p + newstr_len) {
+
+	for (s = 0; (needle = strstr(target + s, oldstr)) != NULL;
+	            s = p + newstr_len) {
 		target_len += newstr_len - oldstr_len;
 		p = needle - target;
 		if (target_len + 1 > target_max) {
 			target_max = MAX(target_len + 1, target_max * 2);
 			target = xrealloc(target, target_max);
 		}
-		memmove(target + p + newstr_len, target + p + oldstr_len, target_len - p - newstr_len + 1);
+		memmove(target + p + newstr_len, target + p + oldstr_len,
+		                                 target_len - p - newstr_len + 1);
 		memcpy(target + p, newstr, newstr_len);
 	}
+
 	target = xrealloc(target, target_len + 1);
+
 	return target;
 }
 
@@ -181,6 +291,37 @@ char *trim (const char *src, size_t len)
 	return result;
 }
 
+/* Format argument values according to 'format' and return it as a
+ * malloc()ed string. */
+char *format_msg (const char *format, ...)
+{
+	char *result;
+	va_list va;
+
+	va_start (va, format);
+	result = format_msg_va (format, va);
+	va_end (va);
+
+	return result;
+}
+
+/* Format a vararg list according to 'format' and return it as a
+ * malloc()ed string. */
+char *format_msg_va (const char *format, va_list va)
+{
+	int len;
+	char *result;
+	va_list va_copy;
+
+	va_copy (va_copy, va);
+	len = vsnprintf (NULL, 0, format, va_copy) + 1;
+	va_end (va_copy);
+	result = xmalloc (len);
+	vsnprintf (result, len, format, va);
+
+	return result;
+}
+
 /* Return true iff the argument would be a syntactically valid symbol.
  * (Note that the so-called "peculiar indentifiers" are disallowed here.) */
 bool is_valid_symbol (const char *candidate)
@@ -205,24 +346,42 @@ bool is_valid_symbol (const char *candidate)
 /* Return path to a file in MOC config directory. NOT THREAD SAFE */
 char *create_file_name (const char *file)
 {
+	int rc;
 	static char fname[PATH_MAX];
 	char *moc_dir = options_get_str ("MOCDir");
 
-	if (moc_dir[0] == '~') {
-		if (snprintf(fname, sizeof(fname), "%s/%s/%s", get_home (),
-				(moc_dir[1] == '/') ? moc_dir + 2 : moc_dir + 1,
-				file)
-				>= (int)sizeof(fname))
-			fatal ("Path too long!");
-	}
-	else if (snprintf(fname, sizeof(fname), "%s/%s", moc_dir, file)
-			>= (int)sizeof(fname))
+	if (moc_dir[0] == '~')
+		rc = snprintf(fname, sizeof(fname), "%s/%s/%s", get_home (),
+		              (moc_dir[1] == '/') ? moc_dir + 2 : moc_dir + 1,
+		              file);
+	else
+		rc = snprintf(fname, sizeof(fname), "%s/%s", moc_dir, file);
+
+	if (rc >= ssizeof(fname))
 		fatal ("Path too long!");
 
 	return fname;
 }
 
-/* Convert time in second to min:sec text format. buff must be 6 chars long. */
+int get_realtime (struct timespec *ts)
+{
+	int result;
+#ifdef HAVE_CLOCK_GETTIME
+	result = clock_gettime (CLOCK_REALTIME, ts);
+#else
+	struct timeval tv;
+
+	result = gettimeofday (&tv, NULL);
+	if (result == 0) {
+		ts->tv_sec = tv.tv_sec;
+		ts->tv_nsec = tv.tv_usec * 1000L;
+	}
+#endif
+    return result;
+}
+
+/* Convert time in second to min:sec text format.
+   'buff' must be at least 32 chars long. */
 void sec_to_min (char *buff, const int seconds)
 {
 	assert (seconds >= 0);
@@ -235,12 +394,12 @@ void sec_to_min (char *buff, const int seconds)
 		min = seconds / 60;
 		sec = seconds % 60;
 
-		snprintf (buff, 6, "%02d:%02d", min, sec);
+		snprintf (buff, 32, "%02d:%02d", min, sec);
 	}
 	else if (seconds < 10000 * 60)
 
 		/* the time is less than 9999 minutes */
-		snprintf (buff, 6, "%4dm", seconds/60);
+		snprintf (buff, 32, "%4dm", seconds/60);
 	else
 		strcpy (buff, "!!!!!");
 }
@@ -259,10 +418,27 @@ const char *get_home ()
 			if (passwd)
 				home = xstrdup (passwd->pw_dir);
 			else
-				if (errno != 0)
-					logit ("getpwuid(%d): %s", geteuid (), strerror (errno));
+				if (errno != 0) {
+					char *err = xstrerror (errno);
+					logit ("getpwuid(%d): %s", geteuid (), err);
+					free (err);
+				}
 		}
 	}
 
 	return home;
+}
+
+void common_cleanup ()
+{
+#if !HAVE_DECL_STRERROR_R
+	int rc;
+
+	if (im_server)
+		return;
+
+	rc = pthread_mutex_destroy (&xstrerror_mtx);
+	if (rc != 0)
+		logit ("Can't destroy xstrerror_mtx: %s", strerror (rc));
+#endif
 }

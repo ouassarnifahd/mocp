@@ -72,9 +72,9 @@ static char *curr_playing_fname = NULL;
  * so we know that when the queue is empty, we should play the regular
  * playlist from the beginning. */
 static int started_playing_in_queue = 0;
-static pthread_mutex_t curr_playing_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t curr_playing_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-static struct out_buf out_buf;
+static struct out_buf *out_buf;
 static struct hw_funcs hw;
 static struct output_driver_caps hw_caps; /* capabilities of the output
 					     driver */
@@ -87,14 +87,14 @@ static int prev_state = STATE_STOP;
 static int stop_playing = 0;
 static int play_next = 0;
 static int play_prev = 0;
-static pthread_mutex_t request_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t request_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /* Playlists. */
 static struct plist playlist;
 static struct plist shuffled_plist;
 static struct plist queue;
 static struct plist *curr_plist; /* currently used playlist */
-static pthread_mutex_t plist_mut = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t plist_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 /* Is the audio device opened? */
 static int audio_opened = 0;
@@ -109,7 +109,7 @@ static struct audio_conversion sound_conv;
 static int need_audio_conversion = 0;
 
 /* URL of the last played stream. Used to fake pause/unpause of internet
- * streams. Protected by curr_playing_mu. */
+ * streams. Protected by curr_playing_mtx. */
 static char *last_stream_url = NULL;
 
 static int current_mixer = 0;
@@ -187,10 +187,8 @@ static long sfmt_best_matching (const long formats_with_endian,
 	long req = req_with_endian & SFMT_MASK_FORMAT;
 	long best = 0;
 
-#ifdef DEBUG
-	char fmt_name1[SFMT_STR_MAX];
-	char fmt_name2[SFMT_STR_MAX];
-#endif
+	char fmt_name1[SFMT_STR_MAX] DEBUG_ONLY;
+	char fmt_name2[SFMT_STR_MAX] DEBUG_ONLY;
 
 	if (formats & req)
 		best = req;
@@ -253,12 +251,9 @@ static long sfmt_best_matching (const long formats_with_endian,
 			best |= formats_with_endian & SFMT_MASK_ENDIANNESS;
 	}
 
-#ifdef DEBUG
 	debug ("Chose %s as the best matching %s",
 			sfmt_str(best, fmt_name1, sizeof(fmt_name1)),
-			sfmt_str(req_with_endian, fmt_name2,
-				sizeof(fmt_name2)));
-#endif
+			sfmt_str(req_with_endian, fmt_name2, sizeof(fmt_name2)));
 
 	return best;
 }
@@ -295,13 +290,13 @@ int sfmt_Bps (const long format)
  * request and whether or not there are files in the queue. */
 static void go_to_another_file ()
 {
-	int shuffle = options_get_int ("Shuffle");
-	int go_next = (play_next || options_get_int("AutoNext"));
+	bool shuffle = options_get_bool ("Shuffle");
+	bool go_next = (play_next || options_get_bool("AutoNext"));
 	int curr_playing_curr_pos;
 	/* XXX: Shouldn't play_next be protected by mutex? */
 
-	LOCK (curr_playing_mut);
-	LOCK (plist_mut);
+	LOCK (curr_playing_mtx);
+	LOCK (plist_mtx);
 
 	/* If we move forward in the playlist and there are some songs in
 	 * the queue, then play them. */
@@ -321,7 +316,7 @@ static void go_to_another_file ()
 		/* If we just finished playing files from the queue and the
 		 * appropriate option is set, continue with the file played
 		 * before playing the queue. */
-		if (before_queue_fname && options_get_int("QueueNextSongReturn")) {
+		if (before_queue_fname && options_get_bool ("QueueNextSongReturn")) {
 			free (curr_playing_fname);
 			curr_playing_fname = before_queue_fname;
 			before_queue_fname = NULL;
@@ -348,7 +343,7 @@ static void go_to_another_file ()
 
 		/* If we came from the queue and the last file in
 		 * queue wasn't in the playlist, we try to revert to
-		 * the QueueNextSongReturn = 1 behaviour. */
+		 * the QueueNextSongReturn == true behaviour. */
 		if (curr_playing_curr_pos == -1 && before_queue_fname) {
 			curr_playing_curr_pos = plist_find_fname (curr_plist,
 					before_queue_fname);
@@ -367,7 +362,7 @@ static void go_to_another_file ()
 						curr_playing_curr_pos);
 
 			if (curr_playing == -1) {
-				if (options_get_int("Repeat"))
+				if (options_get_bool("Repeat"))
 					curr_playing = plist_last (curr_plist);
 				logit ("Beginning of the list.");
 			}
@@ -386,7 +381,7 @@ static void go_to_another_file ()
 				curr_playing = plist_next (curr_plist,
 						curr_playing_curr_pos);
 
-			if (curr_playing == -1 && options_get_int("Repeat")) {
+			if (curr_playing == -1 && options_get_bool("Repeat")) {
 				if (shuffle) {
 					plist_clear (&shuffled_plist);
 					plist_cat (&shuffled_plist, &playlist);
@@ -401,7 +396,7 @@ static void go_to_another_file ()
 				logit ("Next item");
 
 		}
-		else if (!options_get_int("Repeat")) {
+		else if (!options_get_bool("Repeat")) {
 			curr_playing = -1;
 		}
 		else
@@ -412,8 +407,8 @@ static void go_to_another_file ()
 		before_queue_fname = NULL;
 	}
 
-	UNLOCK (plist_mut);
-	UNLOCK (curr_playing_mut);
+	UNLOCK (plist_mtx);
+	UNLOCK (curr_playing_mtx);
 }
 
 static void *play_thread (void *unused ATTR_UNUSED)
@@ -423,9 +418,9 @@ static void *play_thread (void *unused ATTR_UNUSED)
 	while (curr_playing != -1) {
 		char *file;
 
-		LOCK (plist_mut);
+		LOCK (plist_mtx);
 		file = plist_get_file (curr_plist, curr_playing);
-		UNLOCK (plist_mut);
+		UNLOCK (plist_mtx);
 
 		play_next = 0;
 		play_prev = 0;
@@ -434,49 +429,47 @@ static void *play_thread (void *unused ATTR_UNUSED)
 			int next;
 			char *next_file;
 
-			LOCK (curr_playing_mut);
-			LOCK (plist_mut);
+			LOCK (curr_playing_mtx);
+			LOCK (plist_mtx);
 			logit ("Playing item %d: %s", curr_playing, file);
 
 			if (curr_playing_fname)
 				free (curr_playing_fname);
 			curr_playing_fname = xstrdup (file);
 
-			out_buf_time_set (&out_buf, 0.0);
+			out_buf_time_set (out_buf, 0.0);
 
 			next = plist_next (curr_plist, curr_playing);
-			next_file = next != -1
-				? plist_get_file(curr_plist, next) : NULL;
-			UNLOCK (plist_mut);
-			UNLOCK (curr_playing_mut);
+			next_file = next != -1 ? plist_get_file (curr_plist, next) : NULL;
+			UNLOCK (plist_mtx);
+			UNLOCK (curr_playing_mtx);
 
-			player (file, next_file, &out_buf);
+			player (file, next_file, out_buf);
 			if (next_file)
 				free (next_file);
 
 			set_info_rate (0);
 			set_info_bitrate (0);
 			set_info_channels (1);
-			out_buf_time_set (&out_buf, 0.0);
+			out_buf_time_set (out_buf, 0.0);
 			free (file);
 		}
 
-		LOCK (curr_playing_mut);
+		LOCK (curr_playing_mtx);
 		if (last_stream_url) {
 			free (last_stream_url);
 			last_stream_url = NULL;
 		}
-		UNLOCK (curr_playing_mut);
+		UNLOCK (curr_playing_mtx);
 
 		if (stop_playing) {
-			LOCK (curr_playing_mut);
+			LOCK (curr_playing_mtx);
 			curr_playing = -1;
-			UNLOCK (curr_playing_mut);
+			UNLOCK (curr_playing_mtx);
 			logit ("stopped");
 		}
 		else
 			go_to_another_file ();
-
 	}
 
 	prev_state = state;
@@ -506,14 +499,14 @@ void audio_stop ()
 
 	if (play_thread_running) {
 		logit ("audio_stop()");
-		LOCK (request_mut);
+		LOCK (request_mtx);
 		stop_playing = 1;
-		UNLOCK (request_mut);
+		UNLOCK (request_mtx);
 		player_stop ();
 		logit ("pthread_join (playing_thread, NULL)");
 		rc = pthread_join (playing_thread, NULL);
 		if (rc != 0)
-			logit ("pthread_join() failed: %s", strerror (rc));
+			log_errno ("pthread_join() failed", rc);
 		playing_thread = 0;
 		play_thread_running = 0;
 		stop_playing = 0;
@@ -542,8 +535,8 @@ void audio_play (const char *fname)
 	audio_stop ();
 	player_reset ();
 
-	LOCK (curr_playing_mut);
-	LOCK (plist_mut);
+	LOCK (curr_playing_mtx);
+	LOCK (plist_mtx);
 
 	/* If we have songs in the queue and fname is empty string, start
 	 * playing file from the queue. */
@@ -557,7 +550,7 @@ void audio_play (const char *fname)
 
 		started_playing_in_queue = 1;
 	}
-	else if (options_get_int("Shuffle")) {
+	else if (options_get_bool("Shuffle")) {
 		plist_clear (&shuffled_plist);
 		plist_cat (&shuffled_plist, &playlist);
 		plist_shuffle (&shuffled_plist);
@@ -584,14 +577,13 @@ void audio_play (const char *fname)
 			curr_playing = -1;
 	}
 
-	rc = pthread_create (&playing_thread, NULL, play_thread,
-	                     curr_playing != -1 ? NULL : (void *)fname);
+	rc = pthread_create (&playing_thread, NULL, play_thread, NULL);
 	if (rc != 0)
-		error ("Can't create thread: %s", strerror (rc));
+		error_errno ("Can't create thread", rc);
 	play_thread_running = 1;
 
-	UNLOCK (plist_mut);
-	UNLOCK (curr_playing_mut);
+	UNLOCK (plist_mtx);
+	UNLOCK (curr_playing_mtx);
 }
 
 void audio_next ()
@@ -612,18 +604,18 @@ void audio_prev ()
 
 void audio_pause ()
 {
-	LOCK (curr_playing_mut);
-	LOCK (plist_mut);
+	LOCK (curr_playing_mtx);
+	LOCK (plist_mtx);
 
 	if (curr_playing != -1) {
 		char *sname = plist_get_file (curr_plist, curr_playing);
 
 		if (file_type(sname) == F_URL) {
-			UNLOCK (curr_playing_mut);
-			UNLOCK (plist_mut);
+			UNLOCK (curr_playing_mtx);
+			UNLOCK (plist_mtx);
 			audio_stop ();
-			LOCK (curr_playing_mut);
-			LOCK (plist_mut);
+			LOCK (curr_playing_mtx);
+			LOCK (plist_mtx);
 
 			if (last_stream_url)
 				free (last_stream_url);
@@ -633,7 +625,7 @@ void audio_pause ()
 			curr_playing_fname = xstrdup (sname);
 		}
 		else
-			out_buf_pause (&out_buf);
+			out_buf_pause (out_buf);
 
 		prev_state = state;
 		state = STATE_PAUSE;
@@ -642,29 +634,29 @@ void audio_pause ()
 		free (sname);
 	}
 
-	UNLOCK (plist_mut);
-	UNLOCK (curr_playing_mut);
+	UNLOCK (plist_mtx);
+	UNLOCK (curr_playing_mtx);
 }
 
 void audio_unpause ()
 {
-	LOCK (curr_playing_mut);
+	LOCK (curr_playing_mtx);
 	if (last_stream_url && file_type(last_stream_url) == F_URL) {
 		char *url = xstrdup (last_stream_url);
 
-		UNLOCK (curr_playing_mut);
+		UNLOCK (curr_playing_mtx);
 		audio_play (url);
 		free (url);
 	}
 	else if (curr_playing != -1) {
-		out_buf_unpause (&out_buf);
+		out_buf_unpause (out_buf);
 		prev_state = state;
 		state = STATE_PLAY;
-		UNLOCK (curr_playing_mut);
+		UNLOCK (curr_playing_mtx);
 		state_change ();
 	}
 	else
-		UNLOCK (curr_playing_mut);
+		UNLOCK (curr_playing_mtx);
 }
 
 static void reset_sound_params (struct sound_params *params)
@@ -721,17 +713,14 @@ int audio_open (struct sound_params *sound_params)
 			req_sound_params.fmt);
 
 	/* number of channels */
-	if (req_sound_params.channels > hw_caps.max_channels)
-		driver_sound_params.channels = hw_caps.max_channels;
-	else if (req_sound_params.channels < hw_caps.min_channels)
-		driver_sound_params.channels = hw_caps.min_channels;
-	else
-		driver_sound_params.channels = req_sound_params.channels;
+	driver_sound_params.channels = CLAMP(hw_caps.min_channels,
+	                                     req_sound_params.channels,
+	                                     hw_caps.max_channels);
 
 	res = hw.open (&driver_sound_params);
 
 	if (res) {
-		char fmt_name[SFMT_STR_MAX];
+		char fmt_name[SFMT_STR_MAX] LOGIT_ONLY;
 
 		driver_sound_params.rate = hw.get_rate ();
 		if (driver_sound_params.fmt != req_sound_params.fmt
@@ -752,13 +741,11 @@ int audio_open (struct sound_params *sound_params)
 		audio_opened = 1;
 
 		logit ("Requested sound parameters: %s, %d channels, %dHz",
-				sfmt_str(req_sound_params.fmt, fmt_name,
-					sizeof(fmt_name)),
+				sfmt_str(req_sound_params.fmt, fmt_name, sizeof(fmt_name)),
 				req_sound_params.channels,
 				req_sound_params.rate);
 		logit ("Driver sound parameters: %s, %d channels, %dHz",
-				sfmt_str(driver_sound_params.fmt, fmt_name,
-					sizeof(fmt_name)),
+				sfmt_str(driver_sound_params.fmt, fmt_name, sizeof(fmt_name)),
 				driver_sound_params.channels,
 				driver_sound_params.rate);
 	}
@@ -776,9 +763,9 @@ int audio_send_buf (const char *buf, const size_t size)
 		converted = audio_conv (&sound_conv, buf, size, &out_data_len);
 
 	if (need_audio_conversion && converted)
-		res = out_buf_put (&out_buf, converted,	out_data_len);
+		res = out_buf_put (out_buf, converted, out_data_len);
 	else if (!need_audio_conversion)
-		res = out_buf_put (&out_buf, buf, size);
+		res = out_buf_put (out_buf, buf, size);
 	else
 		res = 0;
 
@@ -824,7 +811,7 @@ int audio_send_pcm (const char *buf, const size_t size)
 		buf = equalized;
 	}
 
-	if (softmixer_is_active ())
+	if (softmixer_is_active () || softmixer_is_mono ())
 	{
 		if (equalized)
 		{
@@ -845,7 +832,7 @@ int audio_send_pcm (const char *buf, const size_t size)
 
 	played = hw.play (buf, size);
 
-	if (played == 0)
+	if (played < 0)
 		fatal ("Audio output error!");
 
 	if (softmixed && !equalized)
@@ -860,7 +847,7 @@ int audio_send_pcm (const char *buf, const size_t size)
 /* Get current time of the song in seconds. */
 int audio_get_time ()
 {
-	return state != STATE_STOP ? out_buf_time_get (&out_buf) : 0;
+	return state != STATE_STOP ? out_buf_time_get (out_buf) : 0;
 }
 
 void audio_close ()
@@ -883,7 +870,7 @@ static void find_working_driver (lists_t_strs *drivers, struct hw_funcs *funcs)
 {
 	int ix;
 
-	memset (funcs, 0, sizeof(funcs));
+	memset (funcs, 0, sizeof(*funcs));
 
 	for (ix = 0; ix < lists_strs_size (drivers); ix += 1) {
 		const char *name;
@@ -939,9 +926,10 @@ static void find_working_driver (lists_t_strs *drivers, struct hw_funcs *funcs)
 	fatal ("No valid sound driver!");
 }
 
-static void print_output_capabilities (const struct output_driver_caps *caps)
+static void print_output_capabilities
+            (const struct output_driver_caps *caps LOGIT_ONLY)
 {
-	char fmt_name[SFMT_STR_MAX];
+	char fmt_name[SFMT_STR_MAX] LOGIT_ONLY;
 
 	logit ("Sound driver capabilities: channels %d - %d, formats: %s",
 			caps->min_channels, caps->max_channels,
@@ -952,18 +940,24 @@ void audio_initialize ()
 {
 	find_working_driver (options_get_list ("SoundDriver"), &hw);
 
-	assert (hw_caps.max_channels >= hw_caps.min_channels);
-	assert (sound_format_ok(hw_caps.formats));
+	if (hw_caps.max_channels < hw_caps.min_channels)
+		fatal ("Error initializing audio device: "
+		       "device reports incorrect number of channels.");
+	if (!sound_format_ok (hw_caps.formats))
+		fatal ("Error initializing audio device: "
+		       "device reports no usable formats.");
 
 	print_output_capabilities (&hw_caps);
-	if (!options_get_int("Allow24bitOutput")
+	if (!options_get_bool ("Allow24bitOutput")
 			&& hw_caps.formats & (SFMT_S32 | SFMT_U32)) {
-		logit ("Disabling 24bit modes because Allow24bitOutput is set "
-				"to no.");
+		logit ("Disabling 24bit modes because Allow24bitOutput is set to no.");
 		hw_caps.formats &= ~(SFMT_S32 | SFMT_U32);
+		if (!sound_format_ok (hw_caps.formats))
+			fatal ("No available sound formats after disabling 24bit modes. "
+			       "Consider setting Allow24bitOutput to yes.");
 	}
 
-	out_buf_init (&out_buf, options_get_int("OutputBuffer") * 1024);
+	out_buf = out_buf_new (options_get_int("OutputBuffer") * 1024);
 
 	softmixer_init();
 	equalizer_init();
@@ -981,35 +975,36 @@ void audio_exit ()
 	audio_stop ();
 	if (hw.shutdown)
 		hw.shutdown ();
-	out_buf_destroy (&out_buf);
+	out_buf_free (out_buf);
+	out_buf = NULL;
 	plist_free (&playlist);
 	plist_free (&shuffled_plist);
 	plist_free (&queue);
 	player_cleanup ();
-	rc = pthread_mutex_destroy (&curr_playing_mut);
+	rc = pthread_mutex_destroy (&curr_playing_mtx);
 	if (rc != 0)
-		logit ("Can't destroy curr_playing_mut: %s", strerror (rc));
-	rc = pthread_mutex_destroy (&plist_mut);
+		log_errno ("Can't destroy curr_playing_mtx", rc);
+	rc = pthread_mutex_destroy (&plist_mtx);
 	if (rc != 0)
-		logit ("Can't destroy plist_mut: %s", strerror (rc));
-	rc = pthread_mutex_destroy (&request_mut);
+		log_errno ("Can't destroy plist_mtx", rc);
+	rc = pthread_mutex_destroy (&request_mtx);
 	if (rc != 0)
-		logit ("Can't destroy request_mut: %s", strerror (rc));
+		log_errno ("Can't destroy request_mtx", rc);
 
 	if (last_stream_url)
 		free (last_stream_url);
 
-        softmixer_shutdown();
-        equalizer_shutdown();
+	softmixer_shutdown();
+	equalizer_shutdown();
 }
 
 void audio_seek (const int sec)
 {
 	int playing;
 
-	LOCK (curr_playing_mut);
+	LOCK (curr_playing_mtx);
 	playing = curr_playing;
-	UNLOCK (curr_playing_mut);
+	UNLOCK (curr_playing_mtx);
 
 	if (playing != -1 && state == STATE_PLAY)
 		player_seek (sec);
@@ -1021,9 +1016,9 @@ void audio_jump_to (const int sec)
 {
 	int playing;
 
-	LOCK (curr_playing_mut);
+	LOCK (curr_playing_mtx);
 	playing = curr_playing;
-	UNLOCK (curr_playing_mut);
+	UNLOCK (curr_playing_mtx);
 
 	if (playing != -1 && state == STATE_PLAY)
 		player_jump_to (sec);
@@ -1043,40 +1038,38 @@ int audio_get_prev_state ()
 
 void audio_plist_add (const char *file)
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_clear (&shuffled_plist);
 	if (plist_find_fname(&playlist, file) == -1)
 		plist_add (&playlist, file);
 	else
-		logit ("Wanted to add a file that is already present on the "
-				"list: %s", file);
-	UNLOCK (plist_mut);
+		logit ("Wanted to add a file already present: %s", file);
+	UNLOCK (plist_mtx);
 }
 
 void audio_queue_add (const char *file)
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	if (plist_find_fname(&queue, file) == -1)
 		plist_add (&queue, file);
 	else
-		logit ("Wanted to add a file that is already present in the "
-				"queue: %s", file);
-	UNLOCK (plist_mut);
+		logit ("Wanted to add a file already present: %s", file);
+	UNLOCK (plist_mtx);
 }
 
 void audio_plist_clear ()
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_clear (&shuffled_plist);
 	plist_clear (&playlist);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 void audio_queue_clear ()
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_clear (&queue);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 /* Returned memory is malloc()ed. */
@@ -1084,9 +1077,9 @@ char *audio_get_sname ()
 {
 	char *sname;
 
-	LOCK (curr_playing_mut);
+	LOCK (curr_playing_mtx);
 	sname = xstrdup (curr_playing_fname);
-	UNLOCK (curr_playing_mut);
+	UNLOCK (curr_playing_mtx);
 
 	return sname;
 }
@@ -1116,7 +1109,7 @@ void audio_plist_delete (const char *file)
 {
 	int num;
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	num = plist_find_fname (&playlist, file);
 	if (num != -1)
 		plist_delete (&playlist, num);
@@ -1124,18 +1117,18 @@ void audio_plist_delete (const char *file)
 	num = plist_find_fname (&shuffled_plist, file);
 	if (num != -1)
 		plist_delete (&shuffled_plist, num);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 void audio_queue_delete (const char *file)
 {
 	int num;
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	num = plist_find_fname (&queue, file);
 	if (num != -1)
 		plist_delete (&queue, num);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 /* Get the time of a file if the file is on the playlist and
@@ -1148,20 +1141,20 @@ int audio_get_ftime (const char *file)
 
 	mtime = get_mtime (file);
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	i = plist_find_fname (&playlist, file);
 	if (i != -1) {
 		time = get_item_time (&playlist, i);
 		if (time != -1) {
 			if (playlist.items[i].mtime == mtime) {
 				debug ("Found time for %s", file);
-				UNLOCK (plist_mut);
+				UNLOCK (plist_mtx);
 				return time;
 			}
 			logit ("mtime for %s has changed", file);
 		}
 	}
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 
 	return -1;
 }
@@ -1171,7 +1164,7 @@ void audio_plist_set_time (const char *file, const int time)
 {
 	int i;
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	if ((i = plist_find_fname(&playlist, file)) != -1) {
 		plist_set_item_time (&playlist, i, time);
 		playlist.items[i].mtime = get_mtime (file);
@@ -1180,7 +1173,7 @@ void audio_plist_set_time (const char *file, const int time)
 	else
 		logit ("Request for updating time for a file not present on the"
 				" playlist!");
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 /* Notify that the state was changed (used by the player). */
@@ -1195,33 +1188,33 @@ int audio_plist_get_serial ()
 {
 	int serial;
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	serial = plist_get_serial (&playlist);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 
 	return serial;
 }
 
 void audio_plist_set_serial (const int serial)
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_set_serial (&playlist, serial);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 /* Swap 2 files on the playlist. */
 void audio_plist_move (const char *file1, const char *file2)
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_swap_files (&playlist, file1, file2);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 void audio_queue_move (const char *file1, const char *file2)
 {
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_swap_files (&queue, file1, file2);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 }
 
 /* Return a copy of the song queue.  We cannot just return constant
@@ -1232,9 +1225,9 @@ struct plist* audio_queue_get_contents ()
 	struct plist *ret = (struct plist *)xmalloc (sizeof(struct plist));
 	plist_init (ret);
 
-	LOCK (plist_mut);
+	LOCK (plist_mtx);
 	plist_cat (ret, &queue);
-	UNLOCK (plist_mut);
+	UNLOCK (plist_mtx);
 
 	return ret;
 }

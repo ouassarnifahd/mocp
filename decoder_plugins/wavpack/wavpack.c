@@ -22,6 +22,8 @@
 #endif
 
 #include <string.h>
+#include <strings.h>
+#include <stdint.h>
 #include <assert.h>
 #include <wavpack/wavpack.h>
 
@@ -105,11 +107,10 @@ static int wav_seek (void *prv_data, int sec)
 
 	assert (sec >= 0);
 
-	if ( WavpackSeekSample (data->wpc, sec * data->sample_rate) )
+	if (WavpackSeekSample (data->wpc, sec * data->sample_rate))
 		return sec;
 
-	decoder_error (&data->error, ERROR_FATAL, 0,
-					"Fatal seeking error!");
+	decoder_error (&data->error, ERROR_FATAL, 0, "Fatal seeking error!");
 	return -1;
 }
 
@@ -202,10 +203,9 @@ static int wav_decode (void *prv_data, char *buf, int buf_len,
 	struct wavpack_data *data = (struct wavpack_data *)prv_data;
 	int ret, i, s_num, iBps, oBps;
 
-	int8_t * buf8 = (int8_t *)buf;
-	int16_t * buf16 = (int16_t *)buf;
-	int32_t * buf32 = (int32_t *)buf;
-
+	int8_t *buf8 = (int8_t *)buf;
+	int16_t *buf16 = (int16_t *)buf;
+	int32_t *buf32 = (int32_t *)buf;
 
 	iBps = data->channels * WavpackGetBytesPerSample (data->wpc);
 	oBps = (iBps == 6) ? 8 : iBps;
@@ -213,10 +213,9 @@ static int wav_decode (void *prv_data, char *buf, int buf_len,
 
 	decoder_error_clear (&data->error);
 
-	int32_t *dbuf = (int32_t *)xcalloc (
-			 s_num, data->channels * 4);
+	int32_t *dbuf = (int32_t *)xcalloc (s_num, data->channels * 4);
 
-	ret = WavpackUnpackSamples (data->wpc, dbuf, s_num );
+	ret = WavpackUnpackSamples (data->wpc, dbuf, s_num);
 
 	if (ret == 0) {
 		free (dbuf);
@@ -265,7 +264,7 @@ static int wav_our_mime (const char *mime ATTR_UNUSED)
 	return 0;
 }
 
-static void wav_get_name (const char *file ATTR_UNUSED, char buf[4])
+static void wav_get_name (const char *unused ATTR_UNUSED, char buf[4])
 {
 	strcpy (buf, "WV");
 }

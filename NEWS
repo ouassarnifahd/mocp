@@ -1,4 +1,100 @@
-2.5.0
+   [Note that all relevant maintenance applied to the stable version has
+    also been applied to the development version.  You should review the
+    development version changes in conjunction with those of the current
+    stable version maintenance releases.]
+
+
+2.6 - "Usability"  [alpha3: 2016-11-16]
+	* Autotools and packaging changes:
+	  - Dropped version micro number for development versions
+	  - Upgraded autoconf-archive macros to 2014-02-28 release
+	  - Replaced custom shell code with Autoconf archive macros
+	* Changed build behaviours:
+	  - 'make dist': now defaults to XZ compression
+	  - curl-config: replaced by pkg-config
+	  - New GCC-5 and 6 warnings addressed
+	  - Removed checks for POSIX.1 and C99 mandated headers and functions
+	* Changed minimum support and release requirements:
+	  - POSIX.1: introduced minimum requirement of IEEE 1003.1-2001
+	  - C Compiler: introduced minimum requirement of ISO 9899:1999
+	  - FFmpeg/LibAV: raised minimum requirement to release 1.0/10.0
+	  - FLAC: raised minimum requirement to release 1.1.3
+	  - Berkeley DB: raised minimum requirement to release 4.1
+	  - libcurl: raised minimum requirement to version 7.15.1
+	  - autoconf: raised minimum requirement to version 2.64
+	  - ALSA: raised minimum requirement to version 1.0.11
+	* New and changed library requirements:
+	  - POPT library: MOC now requires libpopt
+	* Documentation:
+	  - Improved wording of some error messages
+	  - Added environment variables section to the manpage
+	* Removed functionality:
+	  - Transitional code from the previous release
+	  - autogen.sh in favour of autoreconf(1)
+	  - Deprecated ffmpeg-config support
+	  - Warning of changed executable name
+	  - Removed "Search Next" interface command
+	* Changed functionality:
+	  - Decoupled mono-mixing from softmixer
+	  - Made command line toggling arguments case insensitive
+	* Added functionality:
+	  - Introduced in-memory circular logging buffer
+	  - Introduced MOCP_POPTRC environment variable
+	  - Introduced MOCP_OPTS environment variable
+	  - Add 24-bit support to the OSS sound driver (Vladimir Krylov)
+	* New and changed command line options:
+	  - echo-args: Show POPT-interpreted command line arguments
+	* New and changed audio decoders:
+	  - All sndfile-supported extensions are now available
+	  - Added .mat[45] extensions as aliases for .mat in sndfile decoder
+	  - Added .ircam extension as alias for .sf in sndfile decoder
+	  - Added reading from Internet streams to FFmpeg decoder (Jenny Wong)
+	* Changes to supported formats and codecs:
+	  - All formats provided by Sndfile are now supported
+	  - DSD: now supported via FFmpeg/LibAV (.dff and .dsf files)
+	  - TTA: now supported via FFmpeg/LibAV
+	  - VQF: now supported via FFmpeg/LibAV
+	* Miscellaneous
+	  - Improved logging from ALSA sound driver and library
+	  - Fixed displayed ALSA volume percentage drift
+
+2.5.2  [2016-11-16]
+	* New configuration file options:
+	  - ALSAStutterDefeat: avoid the ALSA bug which causes stuttering
+	* Significant bug fixes:
+	  - Fixed error during configure on busybox systems
+	  - Fixed calculation of average bitrate in FLAC decoder
+	  - Fixed unintentional disabling of MMAP support
+	  - Fixed build failure on split ncurses/tinfo systems
+	  - Fixed unreaped children when running in foreground mode
+	  - Fixed freeze on Nokia devices if audios play to completion
+	  - Circumvented ALSA stutter bug
+	  - Added missing 'Precache' option to example config file
+	* Miscellaneous:
+	  - Improved the accuracy of the average bitrate for FLAC
+	  - Mitigated out-of-file seeking for several formats
+	  - Warn of TagLib version requirement rising to 1.5
+	  - Warn of Musepack library changing to libmpc (from libmpcdec)
+
+2.5.1  [2016-02-24]
+	* Significant bug fixes:
+	  - Corrected the setting of linked libraries for Berkeley DB
+	  - Fixed ALSA volume setting problem (Tomasz Golinski)
+	  - Fixed clearing of stream status message on error
+	  - Resolved FFmpeg/LibAV's downmixing API issues (Andreas Cadhalpun)
+	  - Removed duplicate logging of fatal error messages
+	* Miscellaneous:
+	  - Adapted to FFmpeg 3.0 API
+	  - Warn of FFmpeg/LibAV version requirement rising to 1.0/10.0
+	  - Warn of pending POSIX.1-2001 compliance requirement
+	  - Fixed several warnings and errors on OpenBSD (Brent Cook)
+	  - Fixed various (and potential) segfaults (Daniel T. Borelli,
+	    Hendrik Iben, Rastislav Barlik)
+	  - Fixed various resource leakages
+	  - Silenced various compiler warnings
+	  - Added instructions on building with autoreconf
+
+2.5.0 - "Consolidation"  [2014-08-13]
 	* Autotools and packaging changes:
 	  - Upgraded autoconf version requirement to 2.60
 	  - Added '--with-alsa' to suppress ALSA sound driver inclusion
@@ -12,6 +108,7 @@
 	  - Minor reformatting of the configure summary
 	  - Added warnings for various deprecations and potential problems
 	  - Added warnings for unmet future package requirements
+	  - Updated GNU boilerplate text
 	* Improved support for embedded systems:
 	  - Refined FFmpeg decoder configuration for use with cross-compilation
 	  - Provided use of Tremor with the Vorbis decoder
@@ -29,30 +126,44 @@
 	  - New WavPack decoder (Alexandrov Sergey)
 	  - Renamed SndFile plugin for consistancy
 	  - Removed M4A format support from AAC decoder plugin
+	  - Removed WAV format support from ModPlug decoder plugin
+	  - Detect huge files in certain formats which SndFile cannot play
+	  - Improved (drastically in some cases) the accuracy of AAC durations
 	* Overhauled FFmpeg/LibAV decoder:
 	  - Resolved FFmpeg API deprecations
 	  - Provided LibAV compatibility
 	  - Provided proper stereo downmixing
+	  - Provided locking support for non-thread-safe library functions
+	  - Provided better FFmpeg or LibAV discrimination
+	  - Provided better audio duration reliability determination
 	  - Increased number of decodable formats (including Xiph Opus)
 	  - Added decoding of audio from video formats
 	  - Added logging of FFmpeg/LibAV messages
 	  - Added seeking in most (but not all) formats
+	  - Added handling for "planar" codecs
+	  - Excluded experimental codecs from decoding
 	  - Fixed misreporting of tags, duration and bitrates
 	  - Fixed memory and file descriptor leakages
 	  - Fixed severe distortion on 8-bit samples
 	  - Fixed loop playing FLAC files
+	  - Fixed many FFmpeg/LibAV API breakages
 	  - Fixed many miscellaneous bugs
+	  - Detect over-length (and therefore broken) WAV files
+	  - Fixed log formatting when FFmpeg messages contain newline characters
 	* Audio reproduction changes:
 	  - Improved support for 8-bit sample size
 	  - Added software mixer (Hendrik Iben)
 	  - Added parametric equalizer (Hendrik Iben)
 	  - Fixed many bugs which produced distorted sound
+	  - Fixed bugs in 24-bit sample handling (Tomasz Golinski)
 	* General configuration file changes:
 	  - Reconciled and regularised example config and keymap files
 	  - Introduced lists and function-like syntax
 	  - Introduced variable substitution
 	  - Introduced symbol and boolean option types
 	  - Improved security of the configuration file
+	  - Automatic clearing of an overridden default key binding
+	  - Made processing of keymap file consistant with that of config file
 	* Changed configuration file options:
 	  - Layout# options moved to a list and function-like syntax
 	  - SoundDriver option moved to a list syntax
@@ -65,7 +176,7 @@
 	  - RepeatSongChange: govern the running of the OnSongChange command
 	  - OnStop: run an external command on stopping
 	  - EnforceTagsEncoding: substitutes ID3v1TagsEncoding for ISO-8859-1
-	    encoding in id3v2 tags (Aleks Sherikov)
+	    encoding in ID3v2 tags (Aleks Sherikov)
 	  - FileNamesIconv: converts from local to UTF8 encoding for file names
 	    (Aleks Sherikov)
 	  - NonUTFXterm: converts UTF8 to local encoding for X-Term titles
@@ -78,25 +189,31 @@
 	  - ShowTimePercent: set the percent played state (Daniel T. Borelli)
 	  - Various options for SidPlay2, Modplug and TiMidity support
 	* New command line options:
-	  - '-O' to override configuration file settings
-	  - '-q' to queue files from command line (Martin Milata)
 	  - '-j' to jump to some position in the current track (Nuno Cardoso)
+	  - '-O' to override configuration file settings
 	  - '-Q' to display user formatted information (Juho Hämäläinen)
-	  - '-v' to set the volume (Jack Miller)
+	  - '-q' to queue files from command line (Martin Milata)
 	  - '-t' and '--on/off' to toggle or set playback options (Jack Miller)
+	  - '-v' to set the volume (Jack Miller)
 	* Screen handling changes:
 	  - Changed minimum screen height to 7 lines (Tero Marttila)
 	  - Added support for GNU screen title (Jonathan Derque)
-	  - Restore screen to console mode after reporting fatal errors
+	  - Restored screen to console mode after reporting fatal errors
+	  - Populated playlist panel when loading default playlist file
+	  - Removed default playlist autofocus at start
 	  - Fixed overlength highlight bar
 	  - Fixed screen upset when tags contain control characters
+	  - Fixed some screen upsets when tags contain UTF-8 characters (firejox)
+	  - Fixed screen upset caused by screen(1) mis-detection
 	* New and updated client interaction features:
 	  - 'a' command: also add a directory to the playlist (Filippo Giunchedi)
-	  - 'Y' command: prune unreadable files from the playlist (tyranix)
 	  - 'L' command: display music lyrics (Géraud Le Falher)
+	  - 'Y' command: prune unreadable files from the playlist (tyranix)
 	  - Queued messages for display in the message area
 	  - Added play queue (Martin Milata)
 	  - Mark a fragment of a file which can be passed to external commands
+	  - Clear status message after a stream open failure
+	  - Minor help menu clarifications
 	* Improve text entry history and editting:
 	  - Recognise ^u (by default) as delete to start of line
 	  - Recognise ^k (by default) as delete to end of line
@@ -109,30 +226,49 @@
 	  - Enabled highlighted playlist numbers and file times (Marc Tschiesche)
 	  - Fixed miscoloured frame when switching themes (Alexander Polakov)
 	  - Fixed default colour settings
+	  - Fixed cursor placement in themes menu (Alex Merenstein)
+	  - Fixed ordering of theme files in themes menu
+	  - Fixed new attributes application on theme switching (Alex Merenstein)
 	* General code cleaning:
 	  - Refactoring, optimisations and cosmetic improvements
 	  - Silenced many build warnings and errors
 	  - Replaced various deprecated, legacy and platform-specific functions
+	  - Improved thread safety
 	* Significant bug fixes:
-	  - Fixed stale locks freeze in tags cache database following a crash.
+	  - Fixed stale locks freeze in tags cache database following a crash
 	  - Fixed CURL timeout for internet streaming errors (Daniel Stenberg)
 	  - Fixed audio distortion on MP3 file having overly long tag values
 	  - Fixed false positive stream detection in the MP3 decoder
 	  - Fixed Ogg/Vorbis stream detection in the Vorbis decoder
 	  - Fixed 'LRINTF error' raised when reconfiguring MOC
-	  - Handle backspace key properly
-	  - Fixed pthread stack overflow segfault on OpenBSD.
+	  - Fixed backspace key mishandling
+	  - Fixed client interface meta-key handling
+	  - Fixed pthread stack overflow segfault on OpenBSD
 	  - Fixed segfault when text entry history becomes full
 	  - Fixed segfault processing playlists with relative paths
 	  - Fixed memory corruptions when toggling tag reading
+	  - Fixed assertion when a second client is started
+	  - Fixed slow memory leak in client on long-playing streams
 	  - Fixed severe distortion on 11025Hz 16-bit mono audios
 	  - Fixed freeze at end of playing audio file
 	  - Fixed server crash when attempting to play a deleted file
 	  - Fixed MIME type detection on HTTP redirection
 	  - Fixed crash when mixer value is above 100%
+	  - Fixed handling of huge (greater than 2 GiB) files
+	  - Fixed sub-second audio truncation on ALSA
+	  - Fixed segfault when MIME-detected MP3 file has no "extension"
+	  - Fixed segfault when using '--format' without an audio playing
 	  - Workaround for streams that have the actual title as tags/comments
-	  - Indentified cause of "undefined symbol" build errors (node/701)
+	  - Indentified cause of "undefined symbol" build errors
 	  - Plugged all known memory and file descriptor leaks
+	  - Fixed nonsense duration values returned on some corrupt FLAC files
+	  - Fixed 'time >= 0' assertion at change of audio file
+	  - Fixed client event notification failure in some circumstances
+	  - Fixed client abort on duplicated playlist filenames
+	  - Fixed delayed client exit when server invokes long-running scripts
+	    (Alex Merenstein)
+	  - Fixed occasional server freeze on logging when running scripts
+	  - Fixed non-conforming 'User-Agent' HTTP request header
 	* Miscellaneous:
 	  - Updated and reformatted mocp manpage and equalizer README file
 	  - Made many warning and error reports more informative and consistant
@@ -143,9 +279,11 @@
 	  - Improved compatibility with big-endian systems
 	  - Moved tags cache to a Berkeley DB
 	  - Integration of down-stream distribution patches
+	  - Fixed frames to duration calculations in ALSA
+	  - Fixed some mutex management bugs
 	  - Fixed many bugs which crashed MOC
 
-2.4.4
+2.4.4  [2009-01-04]
 	* Fix crash when saving a playlist with URLs.
 	* Fix hang in case of symlink loop (like symlink to parent directory)
 	  when adding files recursively to the playlist.
@@ -166,7 +304,7 @@
 	* Run libtoolize in autogen.sh to prevent conflicts with installed
 	  libtool/libltdl version.
 
-2.4.3
+2.4.3  [2007-07-30]
 	* Fix displaying tags from Internet streams, sometimes the name of the
 	  station or other less useful text was displayed instead the title.
 	* Fix a problem with opening Internet streams with curl 7.16.x. (Samid
@@ -180,7 +318,7 @@
 	* Fix FollowPlayedFile after CLI restart.
 	* Updated moc.spec (Klaus Ethgen)
 
-2.4.2
+2.4.2  [2007-06-10]
 	* Disable 24bit output by default due to reported problems with some
 	  sound cards. It can be enabled by setting Allow24bitOutput option
 	  to yes.
@@ -197,7 +335,7 @@
 	* Fix displaying the playlist panel when the width of the terminal is
 	  an odd number.
 
-2.4.1
+2.4.1  [2006-02-12]
 	* Added Command 'P' and a configuration option PlaylistFullPaths to turn
 	  on/off displaying full paths for files in the playlist.
 	* Fixed choosing endianess when playing float samples (musepack or
@@ -227,7 +365,7 @@
 	  made in the filesystem by this command.
 	* Added missing exec_command# keys in the example keymap file.
 
-2.4.0
+2.4.0  [2006-02-12]
 	* Layout of the main window can be changed using Layout[123] options.
 	  Switching between layouts is done using the 'l' key and now TAB is
 	  used to switch between the playlist and the directory menu. For
@@ -291,7 +429,7 @@
 	  FreeBSD 6.
 	* Fixed OSS support on some machones (like G3 iBook).
 
-2.3.3
+2.3.3  [2006-01-04]
 	* Workaround for backspace key on many terminals (like aterm).
 	* Fixed a memory leak when playing Internet streams. (rixx)
 	* Fixed a crash when an mpc file coudn't be read.
@@ -302,7 +440,7 @@
 	* Fixed resource leak when reading tags from invalid OGG file.
 	* Check if FileNamesIconv has valid format at startup like TagsIconv.
 
-2.3.2
+2.3.2  [2005-09-25]
 	* Optimized 24bit->16bit conversion. Helps playing mp3 on handheld
 	  devices without FPU.
 	* Fixed a crash when using the playlist with ReadTags turnedoff.
@@ -318,7 +456,7 @@
 	  bitrate updates.
 	* Fixed a typo: owerwrite -> overwrite.
 
-2.3.1
+2.3.1  [2005-08-02]
 	* Fixed detecting MPEG stream by the content (Shoutcast fix).
 	* Fixed handling ALSA mixer events (crash in some situations).
 	* Fixed handling a mixer channel that has no playback volume.
@@ -337,7 +475,7 @@
 	* Fixed counting time after file open error.
 	* Fixed some gcc4 warnings.
 
-2.3.0
+2.3.0  [2005-07-09]
 	* Network streams (shoutcast, icecast, regular HTTP, FTP). You can load
 	  an m3u file with a URL or use the 'o' command.
 	* JACK output (by Alex Norman).
@@ -421,7 +559,7 @@
 	* Fixed a memory leak in iconv_str() when iconv() is not available.
 	  (breg)
 
-2.2.2
+2.2.2  [2005-05-16]
 	* Added an option to ignore CRC errors in mp3 files (set to yes by
 	  default, like most players do). This fixes playing mp3 files that
 	  have bad CRC checksums but are actually good.
@@ -444,7 +582,7 @@
 	* Fixed a warning about wprintw() usage on some systems.
 	* Fixed setting compiler flags for vorbis.
 
-2.2.1
+2.2.1  [2005-04-16]
 	* Fixed missing titles of files without tags when added to the playlist.
 	* Fixed refreshing the screen after searching.
 	* Fixed recognizing AIFF file extension.
@@ -457,10 +595,10 @@
 	* Fixed --without-sndfile configure option.
 	* Fixed a rare deadlock.
 
-2.2.0
+2.2.0  [2005-02-26]
 	* Added support for FLAC audio format.
-	* Added suport for various file formats like au, aiff, voc, and more
-	  using libsndfile. This also provides better support for waves.
+	* Added support for various file formats like au, aiff, voc and more
+	  using libsndfile. This also provides better support for wav files.
 	* Custom keymaps can be used.
 	* Synchronizing the playlist between clients (interface instances).
 	* Going to a directory by typing the path with file-name completion
@@ -531,7 +669,7 @@
 	* Fixed reading track numbers for mp3 files.
 	* Small fixes of ALSA behaviour when underrun occurs.
 
-2.1.4
+2.1.4  [2004-12-31]
 	* Fixed the 'next' command when AutoNext is turned off.
 	* Sorting the files before adding them to the playlist when using the
 	  A command.
@@ -541,20 +679,20 @@
 	* Fixed error messages for mp3 files.
 	* Fixed segfault when reading some tags.
 
-2.1.3
+2.1.3  [2004-11-15]
 	* Fixed compilation with header files not from Linux 2.4.
 
-2.1.2
+2.1.2  [2004-11-14]
 	* Fixed playing mp3 with UseMmap turned on.
 	* Fixed handling ALSA device open errors.
 	* Proper handling 8, 16, and 24 bit sound, raise error if using
 	  anything else.
 	* Fixed a (almost :) deadlock when pressing stop when seeking.
 
-2.1.1
+2.1.1  [2004-11-13]
 	* Added missing example_theme.
 
-2.1.0
+2.1.0  [2004-11-11]
 	* Multiple clients. You can have moc interface on many
 	  consoles/terminals.
 	* Searching the menu (CTRL-g) like M-s in Midnight Commander.
@@ -575,7 +713,7 @@
 	* Fixes for systems where threads are not processes.
 	* Small fixes and cleanups.
 
-2.0.1
+2.0.1  [2004-10-21]
 	* Do not allow to add '..' to the playlist.
 	* Fixed seeking when not playing.
 	* Fixed segfault when using f after creating a playlist from the
@@ -585,7 +723,7 @@
 	* Fixed broken menu after resizing terminal when help screen is
 	  displayed.
 
-2.0.0
+2.0.0  [2004-10-16]
 	* Split into client-server, you can detach the interface and leave
 	  the server playing songs in the background (keys: q - background,
 	  Q - quit).
@@ -613,8 +751,8 @@
 	* Fixed escaping characters in config file, no need for '\\\\'.
 	* Stronger checking for parse errors in configuration file.
 
-1.1.0
-	* Support for WAVE.
+1.1.0  [2002-12-08]
+	* Support for WAV.
 	* Playlist without reading/writeing to file.
 	* Option in the config file to automaticaly change process priority at
 	  startup. Helpful on slow computers.

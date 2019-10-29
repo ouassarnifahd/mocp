@@ -5,11 +5,11 @@ AC_ARG_WITH(flac, AS_HELP_STRING([--without-flac],
 
 if test "x$with_flac" != "xno"
 then
-	PKG_CHECK_MODULES(LIBFLAC, [flac >= 1.1],
+	PKG_CHECK_MODULES(LIBFLAC, [flac >= 1.1.3],
 			  [AC_SUBST(LIBFLAC_LIBS)
-			  AC_SUBST(LIBFLAC_CFLAGS)
-			  want_flac="yes"
-			  DECODER_PLUGINS="$DECODER_PLUGINS flac"],
+			   AC_SUBST(LIBFLAC_CFLAGS)
+			   want_flac="yes"
+			   DECODER_PLUGINS="$DECODER_PLUGINS flac"],
 			  [true])
 fi
 

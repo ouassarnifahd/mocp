@@ -22,8 +22,8 @@
 #include "config.h"
 #endif
 
-#include <ctype.h> // for toupper
-#include <string.h>
+#include <strings.h>
+#include <limits.h>
 #include <assert.h>
 #include <libmodplug/modplug.h>
 
@@ -52,7 +52,7 @@ struct modplug_data
   struct decoder_error error;
 };
 
-#ifdef DEBUG
+#if !defined(NDEBUG) && defined(DEBUG)
 // this is needed because debugging in plugin_init gets lost
 // The alternative is to debug settings when opening a file
 // but settings never change so I need a flag to check if it
@@ -118,7 +118,14 @@ static struct modplug_data *make_modplug_data(const char *file) {
     return data;
   }
 
-  ssize_t size = io_file_size(s);
+  off_t size = io_file_size(s);
+
+  if (!RANGE(1, size, INT_MAX)) {
+    decoder_error(&data->error, ERROR_FATAL, 0,
+                  "Module size unsuitable for loading: %s", file);
+    io_close(s);
+    return data;
+  }
 
 //  if(size>MAXMODSIZE) {
 //    io_close(s);
@@ -126,12 +133,12 @@ static struct modplug_data *make_modplug_data(const char *file) {
 //    return data;
 //  }
 
-  data->filedata = (char *)xmalloc(size);
+  data->filedata = (char *)xmalloc((size_t)size);
 
-  io_read(s, data->filedata, size);
+  io_read(s, data->filedata, (size_t)size);
   io_close(s);
 
-  data->modplugfile=ModPlug_Load(data->filedata, size);
+  data->modplugfile=ModPlug_Load(data->filedata, (int)size);
 
   if(data->modplugfile==NULL) {
     free(data->filedata);
@@ -146,7 +153,7 @@ static void *modplug_open (const char *file)
 {
 // this is not really needed but without it the calls would still be made
 // and thus time gets wasted...
-#ifdef DEBUG
+#if !defined(NDEBUG) && defined(DEBUG)
   if(doDebugSettings) {
     doDebugSettings=0;
     debugSettings();
@@ -158,11 +165,9 @@ static void *modplug_open (const char *file)
     data->length = ModPlug_GetLength(data->modplugfile);
   }
 
-#ifdef DEBUG
   if(data->modplugfile) {
     debug ("Opened file %s", file);
   }
-#endif
 
   return data;
 }
@@ -228,7 +233,7 @@ static int modplug_decode (void *void_data, char *buf, int buf_len,
   return ModPlug_Read(data->modplugfile, buf, buf_len);
 }
 
-static int modplug_get_bitrate (void *void_data ATTR_UNUSED)
+static int modplug_get_bitrate (void *unused ATTR_UNUSED)
 {
   return -1;
 }
@@ -239,21 +244,11 @@ static int modplug_get_duration (void *void_data)
   return data->length/1000;
 }
 
-static void modplug_get_name (const char *file, char buf[4])
-{
-  size_t ix;
-  char *ext;
-
-  ext = ext_pos (file);
-  strncpy (buf, ext, 3);
-  if (strlen (ext) > 3)
-    buf[2] = ext[strlen (ext) - 1];
-  for (ix = 0; ix < strlen (buf); ix += 1)
-    buf[ix] = toupper (buf[ix]);
-}
-
 static int modplug_our_format_ext(const char *ext)
 {
+  // Do not include non-module formats in this list (even if
+  // ModPlug supports them).  Doing so may cause memory exhaustion
+  // in make_modplug_data().
   return
     !strcasecmp (ext, "NONE") ||
     !strcasecmp (ext, "MOD") ||
@@ -266,7 +261,6 @@ static int modplug_our_format_ext(const char *ext)
     !strcasecmp (ext, "ULT") ||
     !strcasecmp (ext, "STM") ||
     !strcasecmp (ext, "FAR") ||
-    !strcasecmp (ext, "WAV") ||
     !strcasecmp (ext, "AMF") ||
     !strcasecmp (ext, "AMS") ||
     !strcasecmp (ext, "DSM") ||
@@ -308,7 +302,7 @@ static struct decoder modplug_decoder =
   modplug_get_error,
   modplug_our_format_ext,
   NULL,
-  modplug_get_name,
+  NULL,
   NULL,
   NULL,
   NULL
@@ -318,23 +312,23 @@ struct decoder *plugin_init ()
 {
   ModPlug_GetSettings(&settings);
   settings.mFlags = 0;
-  settings.mFlags |= options_get_int("ModPlug_Oversampling")
+  settings.mFlags |= options_get_bool("ModPlug_Oversampling")
     ?MODPLUG_ENABLE_OVERSAMPLING:0;
-  settings.mFlags |= options_get_int("ModPlug_NoiseReduction")
+  settings.mFlags |= options_get_bool("ModPlug_NoiseReduction")
     ?MODPLUG_ENABLE_NOISE_REDUCTION:0;
-  settings.mFlags |= options_get_int("ModPlug_Reverb")
+  settings.mFlags |= options_get_bool("ModPlug_Reverb")
     ?MODPLUG_ENABLE_REVERB:0;
-  settings.mFlags |= options_get_int("ModPlug_MegaBass")
+  settings.mFlags |= options_get_bool("ModPlug_MegaBass")
     ?MODPLUG_ENABLE_MEGABASS:0;
-  settings.mFlags |= options_get_int("ModPlug_Surround")
+  settings.mFlags |= options_get_bool("ModPlug_Surround")
     ?MODPLUG_ENABLE_SURROUND:0;
-  if(!strcasecmp(options_get_str("ModPlug_ResamplingMode"), "FIR"))
+  if(!strcasecmp(options_get_symb("ModPlug_ResamplingMode"), "FIR"))
     settings.mResamplingMode = MODPLUG_RESAMPLE_FIR;
-  if(!strcasecmp(options_get_str("ModPlug_ResamplingMode"), "SPLINE"))
+  if(!strcasecmp(options_get_symb("ModPlug_ResamplingMode"), "SPLINE"))
     settings.mResamplingMode = MODPLUG_RESAMPLE_SPLINE;
-  if(!strcasecmp(options_get_str("ModPlug_ResamplingMode"), "LINEAR"))
+  if(!strcasecmp(options_get_symb("ModPlug_ResamplingMode"), "LINEAR"))
     settings.mResamplingMode = MODPLUG_RESAMPLE_LINEAR;
-  if(!strcasecmp(options_get_str("ModPlug_ResamplingMode"), "NEAREST"))
+  if(!strcasecmp(options_get_symb("ModPlug_ResamplingMode"), "NEAREST"))
     settings.mResamplingMode = MODPLUG_RESAMPLE_NEAREST;
   settings.mChannels = options_get_int("ModPlug_Channels");
   settings.mBits = options_get_int("ModPlug_Bits");

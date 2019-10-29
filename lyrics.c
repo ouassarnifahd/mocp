@@ -64,8 +64,10 @@ lists_t_strs *lyrics_load_file (const char *filename)
 
 	lyrics_file = fopen (filename, "r");
 	if (lyrics_file == NULL) {
+		char *err = xstrerror (errno);
+		logit ("Error reading '%s': %s", filename, err);
+		free (err);
 		lyrics_message = "[Lyrics file cannot be read!]";
-		logit ("Error reading '%s': %s", filename, strerror (errno));
 		return NULL;
 	}
 
@@ -140,8 +142,8 @@ static char *centre_line (const char* line, int max)
 }
 
 /* Centre all the lines in the lyrics. */
-static lists_t_strs *centre_style (lists_t_strs *lines, int height ATTR_UNUSED,
-                                   int width, void *data ATTR_UNUSED)
+static lists_t_strs *centre_style (lists_t_strs *lines, int unused1 ATTR_UNUSED,
+                                   int width, void *unused2 ATTR_UNUSED)
 {
 	lists_t_strs *result;
 	int ix, size;

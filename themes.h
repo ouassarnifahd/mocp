@@ -42,13 +42,14 @@ enum color_index
 	CLR_ERROR,
 	CLR_MESSAGE,
 	CLR_PLIST_TIME,
-	CLR_LAST, /* Fake element to get number of collors */
+	CLR_LAST, /* Fake element to get number of colors */
 	CLR_WRONG
 };
 
 void theme_init (bool has_xterm);
 int get_color (const enum color_index);
 void themes_switch_theme (const char *file);
+const char *get_current_theme ();
 
 #ifdef __cplusplus
 }

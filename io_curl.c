@@ -16,21 +16,13 @@
 #include <curl/curl.h>
 #include <string.h>
 #include <strings.h>
+#include <ctype.h>
 #include <stdlib.h>
-#ifdef HAVE_SYS_SELECT_H
-# include <sys/select.h>
-#endif
-#include <sys/time.h>
-#include <sys/types.h>
+#include <sys/select.h>
 #include <unistd.h>
 #include <errno.h>
 #include <assert.h>
-#ifdef HAVE_STDINT_H
-# include <stdint.h>
-#endif
-#ifdef HAVE_INTTYPES_H
-# include <inttypes.h>
-#endif
+#include <stdint.h>
 
 #define DEBUG
 
@@ -39,9 +31,19 @@
 #include "io.h"
 #include "io_curl.h"
 #include "options.h"
+#include "lists.h"
+
+static char user_agent[] = PACKAGE_NAME"/"PACKAGE_VERSION;
 
 void io_curl_init ()
 {
+	char *ptr;
+
+	for (ptr = user_agent; *ptr; ptr += 1) {
+		if (*ptr == ' ')
+			*ptr = '-';
+	}
+
 	curl_global_init (CURL_GLOBAL_NOTHING);
 }
 
@@ -50,7 +52,7 @@ void io_curl_cleanup ()
 	curl_global_cleanup ();
 }
 
-static size_t write_callback (void *data, size_t size, size_t nmemb,
+static size_t write_cb (void *data, size_t size, size_t nmemb,
 		void *stream)
 {
 	struct io_stream *s = (struct io_stream *)stream;
@@ -58,14 +60,14 @@ static size_t write_callback (void *data, size_t size, size_t nmemb,
 	size_t data_size = size * nmemb;
 
 	s->curl.buf_fill += data_size;
-	debug ("Got %lu bytes", (unsigned long)data_size);
+	debug ("Got %zu bytes", data_size);
 	s->curl.buf = (char *)xrealloc (s->curl.buf, s->curl.buf_fill);
 	memcpy (s->curl.buf + buf_start, data, data_size);
 
 	return data_size;
 }
 
-static size_t header_callback (void *data, size_t size, size_t nmemb,
+static size_t header_cb (void *data, size_t size, size_t nmemb,
 		void *stream)
 {
 	struct io_stream *s = (struct io_stream *)stream;
@@ -80,7 +82,7 @@ static size_t header_callback (void *data, size_t size, size_t nmemb,
 	/* we dont need '\r\n', so cut it. */
 	header_size = sizeof(char) * (size * nmemb + 1 - 2);
 
-	/* copy the header to char* array*/
+	/* copy the header to char* array */
 	header = (char *)xmalloc (header_size);
 	memcpy (header, data, size * nmemb - 2);
 	header[header_size-1] = 0;
@@ -138,8 +140,7 @@ static size_t header_callback (void *data, size_t size, size_t nmemb,
 			logit ("Bad icy-metaint value");
 		}
 		else
-			debug ("Icy metadata interval: %ld",
-					(long)s->curl.icy_meta_int);
+			debug ("Icy metadata interval: %zu", s->curl.icy_meta_int);
 	}
 
 	free (header);
@@ -147,12 +148,14 @@ static size_t header_callback (void *data, size_t size, size_t nmemb,
 	return size * nmemb;
 }
 
-#ifdef DEBUG
-static int debug_callback (CURL *curl ATTR_UNUSED, curl_infotype i, char *msg,
-		size_t size, void *d ATTR_UNUSED)
+#if !defined(NDEBUG) && defined(DEBUG)
+static int debug_cb (CURL *unused1 ATTR_UNUSED, curl_infotype i,
+                     char *msg, size_t size, void *unused2 ATTR_UNUSED)
 {
+	int ix;
 	char *log;
 	const char *type;
+	lists_t_strs *lines;
 
 	switch (i) {
 	case CURLINFO_TEXT:
@@ -170,11 +173,13 @@ static int debug_callback (CURL *curl ATTR_UNUSED, curl_infotype i, char *msg,
 
 	log = (char *)xmalloc (size + 1);
 	strncpy (log, msg, size);
-	if (size > 0 && log[size-1] == '\n')
-		log[size-1] = 0;
-	else
-		log[size] = 0;
-	debug ("CURL: [%s] %s", type, log);
+	log[size] = 0;
+
+	lines = lists_strs_new (8);
+	lists_strs_split (lines, log, "\n");
+	for (ix = 0; ix < lists_strs_size (lines); ix += 1)
+		debug ("CURL: [%s] %s", type, lists_strs_at (lines, ix));
+	lists_strs_free (lines);
 	free (log);
 
 	return 0;
@@ -196,8 +201,7 @@ static int check_curl_stream (struct io_stream *s)
 				debug ("Read error");
 				res = 0;
 			}
-			curl_multi_remove_handle (s->curl.multi_handle,
-					s->curl.handle);
+			curl_multi_remove_handle (s->curl.multi_handle, s->curl.handle);
 			curl_easy_cleanup (s->curl.handle);
 			s->curl.handle = NULL;
 			debug ("EOF");
@@ -245,14 +249,11 @@ void io_curl_open (struct io_stream *s, const char *url)
 
 	curl_easy_setopt (s->curl.handle, CURLOPT_NOPROGRESS, 1);
 	curl_easy_setopt (s->curl.handle, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_0);
-	curl_easy_setopt (s->curl.handle, CURLOPT_WRITEFUNCTION,
-			write_callback);
+	curl_easy_setopt (s->curl.handle, CURLOPT_WRITEFUNCTION, write_cb);
 	curl_easy_setopt (s->curl.handle, CURLOPT_WRITEDATA, s);
-	curl_easy_setopt (s->curl.handle, CURLOPT_HEADERFUNCTION,
-			header_callback);
+	curl_easy_setopt (s->curl.handle, CURLOPT_HEADERFUNCTION, header_cb);
 	curl_easy_setopt (s->curl.handle, CURLOPT_WRITEHEADER, s);
-	curl_easy_setopt (s->curl.handle, CURLOPT_USERAGENT,
-			PACKAGE_NAME"/"PACKAGE_VERSION);
+	curl_easy_setopt (s->curl.handle, CURLOPT_USERAGENT, user_agent);
 	curl_easy_setopt (s->curl.handle, CURLOPT_URL, s->curl.url);
 	curl_easy_setopt (s->curl.handle, CURLOPT_FOLLOWLOCATION, 1);
 	curl_easy_setopt (s->curl.handle, CURLOPT_FAILONERROR, 1);
@@ -264,10 +265,9 @@ void io_curl_open (struct io_stream *s, const char *url)
 	if (options_get_str("HTTPProxy"))
 		curl_easy_setopt (s->curl.handle, CURLOPT_PROXY,
 				options_get_str("HTTPProxy"));
-#ifdef DEBUG
+#if !defined(NDEBUG) && defined(DEBUG)
 	curl_easy_setopt (s->curl.handle, CURLOPT_VERBOSE, 1);
-	curl_easy_setopt (s->curl.handle, CURLOPT_DEBUGFUNCTION,
-			debug_callback);
+	curl_easy_setopt (s->curl.handle, CURLOPT_DEBUGFUNCTION, debug_cb);
 #endif
 
 	if ((s->curl.multi_status = curl_multi_add_handle(s->curl.multi_handle,
@@ -278,7 +278,7 @@ void io_curl_open (struct io_stream *s, const char *url)
 	}
 
 	if (pipe(s->curl.wake_up_pipe) < 0) {
-		logit ("pipe() failed: %s", strerror(errno));
+		log_errno ("pipe() failed", errno);
 		s->errno_val = EINVAL;
 		return;
 	}
@@ -346,9 +346,9 @@ static int curl_read_internal (struct io_stream *s)
 			fd_set read_fds, write_fds, exc_fds;
 			int max_fd, ret;
 			long milliseconds;
-			struct timeval timeout;
+			struct timespec timeout;
 
-			logit ("Doing select()...");
+			logit ("Doing pselect()...");
 
 			FD_ZERO (&read_fds);
 			FD_ZERO (&write_fds);
@@ -369,10 +369,10 @@ static int curl_read_internal (struct io_stream *s)
 			if (milliseconds <= 0)
 				milliseconds = 1000;
 			timeout.tv_sec = milliseconds / 1000;
-			timeout.tv_usec = (milliseconds % 1000) * 1000;
+			timeout.tv_nsec = (milliseconds % 1000L) * 1000000L;
 
-			ret = select (max_fd + 1, &read_fds, &write_fds,
-					&exc_fds, &timeout);
+			ret = pselect (max_fd + 1, &read_fds, &write_fds, &exc_fds,
+			              &timeout, NULL);
 
 			if (ret < 0 && errno == EINTR) {
 				logit ("Interrupted");
@@ -381,7 +381,7 @@ static int curl_read_internal (struct io_stream *s)
 
 			if (ret < 0) {
 				s->errno_val = errno;
-				logit ("select() failed");
+				logit ("pselect() failed");
 				return 0;
 			}
 
@@ -450,7 +450,7 @@ static void parse_icy_string (struct io_stream *s, const char *str)
 		t = c;
 		while (*c && *c != '=')
 			c++;
-		if (*c != '=' || c - t >= (int)sizeof(name)) {
+		if (*c != '=' || c - t >= ssizeof(name)) {
 			logit ("malformed metadata");
 			return;
 		}
@@ -477,8 +477,8 @@ static void parse_icy_string (struct io_stream *s, const char *str)
 			return;
 		}
 
-		strncpy (value, t, MIN(c - t, (int)sizeof(value) - 1));
-		value[MIN(c - t, (int)sizeof(value) - 1)] = 0;
+		strncpy (value, t, MIN(c - t, ssizeof(value) - 1));
+		value[MIN(c - t, ssizeof(value) - 1)] = 0;
 
 		/* eat ' */
 		c++;
@@ -591,8 +591,7 @@ ssize_t io_curl_read (struct io_stream *s, char *buf, size_t count)
 		if (s->curl.icy_meta_int)
 			s->curl.icy_meta_count += res;
 		nread += res;
-		debug ("Read %d bytes from the buffer (%d bytes full)",
-				(int)res, (int)nread);
+		debug ("Read %zu bytes from the buffer (%zu bytes full)", res, nread);
 
 		if (nread < count && !curl_read_internal(s))
 			return -1;
@@ -623,6 +622,5 @@ void io_curl_wake_up (struct io_stream *s)
 	int w = 1;
 
 	if (write(s->curl.wake_up_pipe[1], &w, sizeof(w)) < 0)
-		logit ("Can't wake up curl thread: write() failed: %s",
-				strerror(errno));
+		log_errno ("Can't wake up curl thread: write() failed", errno);
 }

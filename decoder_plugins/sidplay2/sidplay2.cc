@@ -11,11 +11,19 @@
  * (at your option) any later version.
  *
  */
+#ifdef HAVE_CONFIG_H
+# include "config.h"
+#endif
+
 #include <pthread.h>
 #include <assert.h>
+#include <string.h>
+#include <strings.h>
 
 #include "common.h"
 #include "sidplay2.h"
+#include "log.h"
+#include "options.h"
 
 static SID_EXTERN::sidplay2 *players [POOL_SIZE];
 
@@ -27,19 +35,19 @@ static SID_EXTERN::SidDatabase *database;
 
 static int init_db;
 
-static pthread_mutex_t dbmutex, player_select_mutex;
+static pthread_mutex_t db_mtx, player_select_mtx;
 
 static int defaultLength;
 
 static int minLength;
 
-static int startAtStart;
+static bool startAtStart;
 
-static int playSubTunes;
+static bool playSubTunes;
 
 static sidplay2_data * make_data()
 {
-  pthread_mutex_lock(&player_select_mutex);
+  pthread_mutex_lock(&player_select_mtx);
 
   playerIndex = (playerIndex+1)%POOL_SIZE;
 
@@ -58,7 +66,7 @@ static sidplay2_data * make_data()
 
   s2d->cfg.optimisation = options_get_int(OPT_OPTI);
 
-  switch(options_get_str(OPT_PMODE)[0])
+  switch(options_get_symb(OPT_PMODE)[0])
   {
     case 'M':
       s2d->cfg.playback = sid2_mono;
@@ -85,17 +93,14 @@ static sidplay2_data * make_data()
 
   s2d->builder = builders[playerIndex];
 
-  pthread_mutex_unlock(&player_select_mutex);
+  pthread_mutex_unlock(&player_select_mtx);
 
-  if((*s2d->builder))
-  {
-    s2d->builder->create(s2d->player->info().maxsids);
-    s2d->builder->sampling(s2d->cfg.frequency);
-  }
-  else
-  {
+  if(!(*s2d->builder))
     fatal("sidplay2: Cannot create ReSID-Builder!");
-  }
+
+  s2d->builder->create(s2d->player->info().maxsids);
+
+  s2d->builder->sampling(s2d->cfg.frequency);
 
   s2d->cfg.sidEmulation = s2d->builder;
 
@@ -194,14 +199,14 @@ static void init_database()
 {
   int cancel = 0;
 
-  pthread_mutex_lock(&dbmutex);
+  pthread_mutex_lock(&db_mtx);
 
   if(init_db==0)
     cancel = 1;
 
   init_db = 0;
 
-  pthread_mutex_unlock(&dbmutex);
+  pthread_mutex_unlock(&db_mtx);
 
   if(cancel)
     return;
@@ -229,6 +234,7 @@ extern "C" void *sidplay2_open(const char *file)
 
   decoder_error_init(&s2d->error);
   s2d->tune=NULL;
+  s2d->sublengths = NULL;
   s2d->length = 0;
 
   SidTuneMod *st = new SidTuneMod(file);
@@ -298,7 +304,8 @@ extern "C" void *sidplay2_open(const char *file)
 
   if(!(*st))
   {
-    decoder_error(&s2d->error, ERROR_FATAL, 0, "Cannot select first song in %s", file);
+    decoder_error(&s2d->error, ERROR_FATAL, 0,
+                  "Cannot select first song in %s", file);
     delete st;
     return s2d;
   }
@@ -342,7 +349,7 @@ extern "C" void sidplay2_get_error (void *prv_data, struct decoder_error *error)
 }
 
 extern "C" void sidplay2_info (const char *file_name, struct file_tags *info,
-		const int tags_sel)
+		const int)
 {
   if(init_db)
     init_database();
@@ -442,10 +449,8 @@ extern "C" void sidplay2_info (const char *file_name, struct file_tags *info,
  * Generic seeking can't be done because the whole audio would have to be
  * replayed until the position is reached (which would introduce a delay).
  * */
-extern "C" int sidplay2_seek (void *void_data ATTR_UNUSED, int sec ATTR_UNUSED)
+extern "C" int sidplay2_seek (void *, int)
 {
-  assert (sec >= 0);
-
   return -1;
 }
 
@@ -479,7 +484,7 @@ extern "C" int sidplay2_decode (void *void_data, char *buf, int buf_len,
   return data->player->play((void *)buf, buf_len);
 }
 
-extern "C" int sidplay2_get_bitrate (void *void_data ATTR_UNUSED)
+extern "C" int sidplay2_get_bitrate (void *)
 {
   return -1;
 }
@@ -489,19 +494,6 @@ extern "C" int sidplay2_get_duration (void *void_data)
   struct sidplay2_data *data = (struct sidplay2_data *)void_data;
 
   return data->length;
-}
-
-extern "C" void sidplay2_get_name (const char *file, char buf[4])
-{
-  size_t ix;
-  char *ext;
-
-  ext = ext_pos (file);
-  strncpy (buf, ext, 3);
-  if (strlen (ext) > 3)
-    buf[2] = ext[strlen (ext) - 1];
-  for (ix = 0; ix < strlen (buf); ix += 1)
-    buf[ix] = toupper (buf[ix]);
 }
 
 extern "C" int sidplay2_our_format_ext(const char *ext)
@@ -517,9 +509,9 @@ extern "C" void init()
 
   minLength = options_get_int(OPT_MINLEN);
 
-  startAtStart = options_get_int(OPT_START);
+  startAtStart = options_get_bool(OPT_START);
 
-  playSubTunes = options_get_int(OPT_SUBTUNES);
+  playSubTunes = options_get_bool(OPT_SUBTUNES);
 
   database = NULL;
   init_db = 1;
@@ -529,9 +521,9 @@ extern "C" void init()
 
 extern "C" void destroy()
 {
-  pthread_mutex_destroy(&dbmutex);
+  pthread_mutex_destroy(&db_mtx);
 
-  pthread_mutex_destroy(&player_select_mutex);
+  pthread_mutex_destroy(&player_select_mtx);
 
   if(database!=NULL)
     delete database;
@@ -562,7 +554,7 @@ static struct decoder sidplay2_decoder =
   sidplay2_get_error,
   sidplay2_our_format_ext,
   NULL,
-  sidplay2_get_name,
+  NULL,
   NULL,
   NULL,
   NULL
@@ -570,7 +562,7 @@ static struct decoder sidplay2_decoder =
 
 extern "C" struct decoder *plugin_init ()
 {
-  pthread_mutex_init(&dbmutex, NULL);
-  pthread_mutex_init(&player_select_mutex, NULL);
+  pthread_mutex_init(&db_mtx, NULL);
+  pthread_mutex_init(&player_select_mtx, NULL);
   return &sidplay2_decoder;
 }

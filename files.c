@@ -19,22 +19,14 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <dirent.h>
 
 #ifdef HAVE_LIBMAGIC
 #include <magic.h>
 #include <pthread.h>
-#endif
-
-/* Include dirent for various systems */
-#ifdef HAVE_DIRENT_H
-# include <dirent.h>
-#else
-# define dirent direct
-# if HAVE_SYS_NDIR_H
-#  include <sys/ndir.h>
-# endif
 #endif
 
 #define DEBUG
@@ -68,7 +60,7 @@ void files_init ()
 	                     MAGIC_NO_CHECK_TAR | MAGIC_NO_CHECK_TOKENS |
 	                     MAGIC_NO_CHECK_FORTRAN | MAGIC_NO_CHECK_TROFF);
 	if (cookie == NULL)
-		logit ("Error allocating magic cookie: %s", strerror (errno));
+		log_errno ("Error allocating magic cookie", errno);
 	else if (magic_load (cookie, NULL) != 0) {
 		logit ("Error loading magic database: %s", magic_error (cookie));
 		magic_close (cookie);
@@ -104,8 +96,10 @@ int is_dir (const char *file)
 	if (is_url (file))
 		return 0;
 
-	if (stat(file, &file_stat) == -1) {
-		error ("Can't stat %s: %s", file, strerror(errno));
+	if (stat (file, &file_stat) == -1) {
+		char *err = xstrerror (errno);
+		error ("Can't stat %s: %s", file, err);
+		free (err);
 		return -1;
 	}
 	return S_ISDIR(file_stat.st_mode) ? 1 : 0;
@@ -137,17 +131,17 @@ enum file_type file_type (const char *file)
 }
 
 /* Given a file name, return the mime type or NULL. */
-char *file_mime_type (const char *file ATTR_UNUSED)
+char *file_mime_type (const char *file ASSERT_ONLY)
 {
 	char *result = NULL;
 
 	assert (file != NULL);
 
 #ifdef HAVE_LIBMAGIC
-	static pthread_mutex_t magic_mutex = PTHREAD_MUTEX_INITIALIZER;
+	static pthread_mutex_t magic_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 	if (cookie != NULL) {
-		LOCK(magic_mutex);
+		LOCK(magic_mtx);
 		if (cached_file && !strcmp (cached_file, file))
 			result = xstrdup (cached_result);
 		else {
@@ -162,7 +156,7 @@ char *file_mime_type (const char *file ATTR_UNUSED)
 				cached_result = xstrdup (result);
 			}
 		}
-		UNLOCK(magic_mutex);
+		UNLOCK(magic_mtx);
 	}
 #endif
 
@@ -172,7 +166,7 @@ char *file_mime_type (const char *file ATTR_UNUSED)
 /* Make a title from the file name for the item.  If hide_extn != 0,
  * strip the file name from extension. */
 void make_file_title (struct plist *plist, const int num,
-		const int hide_extension)
+		const bool hide_extension)
 {
 	assert (plist != NULL);
 	assert (LIMIT(num, plist->num));
@@ -182,13 +176,14 @@ void make_file_title (struct plist *plist, const int num,
 		char *file = xstrdup (plist->items[num].file);
 
 		if (hide_extension) {
-			char *dot = strrchr (file, '.');
+			char *extn;
 
-			if (dot)
-				*dot = 0;
+			extn = ext_pos (file);
+			if (extn)
+				*(extn - 1) = 0;
 		}
 
-		if (options_get_int ("FileNamesIconv"))
+		if (options_get_bool ("FileNamesIconv"))
 		{
 			char *old_title = file;
 			file = files_iconv_str (file);
@@ -205,7 +200,7 @@ void make_file_title (struct plist *plist, const int num,
 /* Make a title from the tags for the item. */
 void make_tags_title (struct plist *plist, const int num)
 {
-	int hide_extn;
+	bool hide_extn;
 	char *title;
 
 	assert (plist != NULL);
@@ -213,7 +208,7 @@ void make_tags_title (struct plist *plist, const int num)
 	assert (!plist_deleted (plist, num));
 
 	if (file_type (plist->items[num].file) == F_URL) {
-		make_file_title (plist, num, 0);
+		make_file_title (plist, num, false);
 		return;
 	}
 
@@ -229,16 +224,17 @@ void make_tags_title (struct plist *plist, const int num)
 		return;
 	}
 
-	hide_extn = options_get_int ("HideFileExtension");
+	hide_extn = options_get_bool ("HideFileExtension");
 	make_file_title (plist, num, hide_extn);
 }
 
 /* Switch playlist titles to title_file */
 void switch_titles_file (struct plist *plist)
 {
-	int i, hide_extn;
+	int i;
+	bool hide_extn;
 
-	hide_extn = options_get_int ("HideFileExtension");
+	hide_extn = options_get_bool ("HideFileExtension");
 
 	for (i = 0; i < plist->num; i++) {
 		if (plist_deleted (plist, i))
@@ -254,9 +250,10 @@ void switch_titles_file (struct plist *plist)
 /* Switch playlist titles to title_tags */
 void switch_titles_tags (struct plist *plist)
 {
-	int i, hide_extn;
+	int i;
+	bool hide_extn;
 
-	hide_extn = options_get_int ("HideFileExtension");
+	hide_extn = options_get_bool ("HideFileExtension");
 
 	for (i = 0; i < plist->num; i++) {
 		if (plist_deleted (plist, i))
@@ -269,16 +266,17 @@ void switch_titles_tags (struct plist *plist)
 
 /* Add file to the directory path in buf resolving '../' and removing './'. */
 /* buf must be absolute path. */
-void resolve_path (char *buf, const int size, const char *file)
+void resolve_path (char *buf, size_t size, const char *file)
 {
+	int rc;
 	char *f; /* points to the char in *file we process */
 	char path[2*PATH_MAX]; /* temporary path */
-	int len = 0; /* number of characters in the buffer */
+	size_t len = 0; /* number of characters in the buffer */
 
 	assert (buf[0] == '/');
 
-	if (snprintf(path, sizeof(path), "%s/%s/", buf, file)
-			>= (int)sizeof(path))
+	rc = snprintf(path, sizeof(path), "%s/%s/", buf, file);
+	if (rc >= ssizeof(path))
 		fatal ("Path too long!");
 
 	f = path;
@@ -376,7 +374,7 @@ int read_directory (const char *directory, lists_t_strs *dirs,
 {
 	DIR *dir;
 	struct dirent *entry;
-	int show_hidden = options_get_int ("ShowHiddenFiles");
+	bool show_hidden = options_get_bool ("ShowHiddenFiles");
 	int dir_is_root;
 
 	assert (directory != NULL);
@@ -386,7 +384,7 @@ int read_directory (const char *directory, lists_t_strs *dirs,
 	assert (plist != NULL);
 
 	if (!(dir = opendir(directory))) {
-		error ("Can't read directory: %s", strerror(errno));
+		error_errno ("Can't read directory", errno);
 		return 0;
 	}
 
@@ -396,6 +394,7 @@ int read_directory (const char *directory, lists_t_strs *dirs,
 		dir_is_root = 0;
 
 	while ((entry = readdir(dir))) {
+		int rc;
 		char file[PATH_MAX];
 		enum file_type type;
 
@@ -408,12 +407,15 @@ int read_directory (const char *directory, lists_t_strs *dirs,
 			continue;
 		if (!show_hidden && entry->d_name[0] == '.')
 			continue;
-		if (snprintf(file, sizeof(file), "%s/%s", dir_is_root ?
-					"" : directory,	entry->d_name)
-				>= (int)sizeof(file)) {
+
+		rc = snprintf(file, sizeof(file), "%s/%s",
+		              dir_is_root ? "" : directory, entry->d_name);
+		if (rc >= ssizeof(file)) {
 			error ("Path too long!");
+			closedir (dir);
 			return 0;
 		}
+
 		type = file_type (file);
 		if (type == F_SOUND)
 			plist_add (plist, file);
@@ -449,8 +451,10 @@ static int read_directory_recurr_internal (const char *directory, struct plist *
 	struct dirent *entry;
 	struct stat st;
 
-	if (stat(directory, &st)) {
-		error ("Can't stat %s: %s", directory, strerror(errno));
+	if (stat (directory, &st)) {
+		char *err = xstrerror (errno);
+		error ("Can't stat %s: %s", directory, err);
+		free (err);
 		return 0;
 	}
 
@@ -463,7 +467,7 @@ static int read_directory_recurr_internal (const char *directory, struct plist *
 	}
 
 	if (!(dir = opendir(directory))) {
-		error ("Can't read directory: %s", strerror(errno));
+		error_errno ("Can't read directory", errno);
 		return 1;
 	}
 
@@ -472,6 +476,7 @@ static int read_directory_recurr_internal (const char *directory, struct plist *
 	(*dir_stack)[*depth - 1] = st.st_ino;
 
 	while ((entry = readdir(dir))) {
+		int rc;
 		char file[PATH_MAX];
 		enum file_type type;
 
@@ -482,16 +487,14 @@ static int read_directory_recurr_internal (const char *directory, struct plist *
 
 		if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, ".."))
 			continue;
-		if (snprintf(file, sizeof(file), "%s/%s", directory,
-					entry->d_name)
-				>= (int)sizeof(file)) {
+		rc = snprintf(file, sizeof(file), "%s/%s", directory, entry->d_name);
+		if (rc >= ssizeof(file)) {
 			error ("Path too long!");
 			continue;
 		}
 		type = file_type (file);
 		if (type == F_DIR)
-			read_directory_recurr_internal(file, plist, dir_stack,
-					depth);
+			read_directory_recurr_internal(file, plist, dir_stack, depth);
 		else if (type == F_SOUND && plist_find_fname(plist, file) == -1)
 			plist_add (plist, file);
 	}
@@ -549,8 +552,7 @@ char *read_line (FILE *file)
 		if (line[len-1] == '\n')
 			break;
 
-		/* If we are here, it means that line is longer than the
-		 * buffer. */
+		/* If we are here, it means that line is longer than the buffer. */
 		line_alloc *= 2;
 		line = (char *)xrealloc (line, sizeof(char) * line_alloc);
 	}
@@ -609,7 +611,6 @@ char *find_match_dir (char *pattern)
 	if (!slash)
 		return NULL;
 	if (slash == pattern) {
-
 		/* only '/dir' */
 		search_dir = xstrdup ("/");
 	}
@@ -675,7 +676,7 @@ int file_exists (const char *file)
 
 	/* Log any error other than non-existence. */
 	if (errno != ENOENT)
-		logit ("Error : %s", strerror (errno));
+		log_errno ("Error", errno);
 
 	return 0;
 }

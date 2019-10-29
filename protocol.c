@@ -33,6 +33,23 @@
 #define UNIX_PATH_MAX	108
 #define SOCKET_NAME	"socket2"
 
+#define nonblocking(fn, result, sock, buf, len) \
+	do { \
+		long flags = fcntl (sock, F_GETFL); \
+		if (flags == -1) \
+			fatal ("Getting flags for socket failed: %s", \
+			        xstrerror (errno)); \
+		flags |= O_NONBLOCK; \
+		if (fcntl (sock, F_SETFL, O_NONBLOCK) == -1) \
+			fatal ("Setting O_NONBLOCK for the socket failed: %s", \
+			        xstrerror (errno)); \
+		result = fn (sock, buf, len, 0); \
+		flags &= ~O_NONBLOCK; \
+		if (fcntl (sock, F_SETFL, flags) == -1) \
+			fatal ("Restoring flags for socket failed: %s", \
+			        xstrerror (errno)); \
+	} while (0)
+
 /* Buffer used to send data in one bigger chunk instead of sending sigle
  * integer, string etc. values. */
 struct packet_buf
@@ -56,86 +73,79 @@ char *socket_name ()
 /* Get an integer value from the socket, return == 0 on error. */
 int get_int (int sock, int *i)
 {
-	int res;
+	ssize_t res;
 
 	res = recv (sock, i, sizeof(int), 0);
 	if (res == -1)
-		logit ("recv() failed when getting int: %s", strerror(errno));
+		log_errno ("recv() failed when getting int", errno);
 
-	return res == sizeof(int) ? 1 : 0;
+	return res == ssizeof(int) ? 1 : 0;
 }
 
 /* Get an integer value from the socket without blocking. */
 enum noblock_io_status get_int_noblock (int sock, int *i)
 {
-	int res;
-	long flags;
+	ssize_t res;
+	char *err;
 
-	if ((flags = fcntl(sock, F_GETFL)) == -1)
-		fatal ("fcntl(sock, F_GETFL) failed: %s", strerror(errno));
-	flags |= O_NONBLOCK;
-	if (fcntl(sock, F_SETFL, O_NONBLOCK) == -1)
-		fatal ("Setting O_NONBLOCK for the socket failed: %s",
-				strerror(errno));
-	res = recv (sock, i, sizeof(int), 0);
-	flags &= ~O_NONBLOCK;
-	if (fcntl(sock, F_SETFL, flags) == -1)
-		fatal ("Restoring flags for socket failed: %s",
-				strerror(errno));
+	nonblocking (recv, res, sock, i, sizeof (int));
 
-	if (res == sizeof(int))
+	if (res == ssizeof (int))
 		return NB_IO_OK;
-	if (res < 0 && errno == EAGAIN)
+	if (res < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
 		return NB_IO_BLOCK;
 
-	logit ("recv() failed when getting int (res %d): %s", res,
-			strerror(errno));
+	err = xstrerror (errno);
+	logit ("recv() failed when getting int (res %zd): %s", res, err);
+	free (err);
+
 	return NB_IO_ERR;
 }
 
 /* Send an integer value to the socket, return == 0 on error */
 int send_int (int sock, int i)
 {
-	int res;
+	ssize_t res;
 
 	res = send (sock, &i, sizeof(int), 0);
 	if (res == -1)
-		logit ("send() failed: %s", strerror(errno));
+		log_errno ("send() failed", errno);
 
-	return res == sizeof(int) ? 1 : 0;
+	return res == ssizeof(int) ? 1 : 0;
 }
 
 #if 0
 /* Get a long value from the socket, return == 0 on error. */
 static int get_long (int sock, long *i)
 {
-	int res;
+	ssize_t res;
 
 	res = recv (sock, i, sizeof(long), 0);
 	if (res == -1)
-		logit ("recv() failed when getting int: %s", strerror(errno));
+		log_errno ("recv() failed when getting int", errno);
 
-	return res == sizeof(long) ? 1 : 0;
+	return res == ssizeof(long) ? 1 : 0;
 }
+#endif
 
+#if 0
 /* Send a long value to the socket, return == 0 on error */
 static int send_long (int sock, long i)
 {
-	int res;
+	ssize_t res;
 
 	res = send (sock, &i, sizeof(long), 0);
 	if (res == -1)
-		logit ("send() failed: %s", strerror(errno));
+		log_errno ("send() failed", errno);
 
-	return res == sizeof(long) ? 1 : 0;
+	return res == ssizeof(long) ? 1 : 0;
 }
 #endif
 
 /* Get the string from socket, return NULL on error. The memory is malloced. */
 char *get_str (int sock)
 {
-	int len;
-	int res, nread = 0;
+	int len, nread = 0;
 	char *str;
 
 	if (!get_int(sock, &len))
@@ -148,10 +158,11 @@ char *get_str (int sock)
 
 	str = (char *)xmalloc (sizeof(char) * (len + 1));
 	while (nread < len) {
+		ssize_t res;
+
 		res = recv (sock, str + nread, len - nread, 0);
 		if (res == -1) {
-			logit ("recv() failed when getting string: %s",
-					strerror(errno));
+			log_errno ("recv() failed when getting string", errno);
 			free (str);
 			return NULL;
 		}
@@ -184,25 +195,25 @@ int send_str (int sock, const char *str)
 /* Get a time_t value from the socket, return == 0 on error. */
 int get_time (int sock, time_t *i)
 {
-	int res;
+	ssize_t res;
 
 	res = recv (sock, i, sizeof(time_t), 0);
 	if (res == -1)
-		logit ("recv() failed when getting time_t: %s", strerror(errno));
+		log_errno ("recv() failed when getting time_t", errno);
 
-	return res == sizeof(time_t) ? 1 : 0;
+	return res == ssizeof(time_t) ? 1 : 0;
 }
 
 /* Send a time_t value to the socket, return == 0 on error */
 int send_time (int sock, time_t i)
 {
-	int res;
+	ssize_t res;
 
 	res = send (sock, &i, sizeof(time_t), 0);
 	if (res == -1)
-		logit ("send() failed: %s", strerror(errno));
+		log_errno ("send() failed", errno);
 
-	return res == sizeof(time_t) ? 1 : 0;
+	return res == ssizeof(time_t) ? 1 : 0;
 }
 
 static struct packet_buf *packet_buf_new ()
@@ -315,7 +326,7 @@ static int send_all (int sock, const char *buf, const size_t size)
 	while (send_pos < size) {
 		sent = send (sock, buf + send_pos, size - send_pos, 0);
 		if (sent < 0) {
-			logit ("Error while sending data: %s", strerror(errno));
+			log_errno ("Error while sending data", errno);
 			return 0;
 		}
 		send_pos += sent;
@@ -423,9 +434,9 @@ int send_tags (int sock, const struct file_tags *tags)
 	return res;
 }
 
-/* Get a playlist item from the server. If empty item->file is an empty string,
- * end of playlist arrived (empty item). The memory is malloc()ed. Return NULL
- * on error. */
+/* Get a playlist item from the server.
+ * The end of the playlist is indicated by item->file being an empty string.
+ * The memory is malloc()ed.  Returns NULL on error. */
 struct plist_item *recv_item (int sock)
 {
 	struct plist_item *item = plist_new_item ();
@@ -442,6 +453,7 @@ struct plist_item *recv_item (int sock)
 			logit ("Error while receiving tags title");
 			free (item->file);
 			free (item);
+			return NULL;
 		}
 
 		item->type = file_type (item->file);
@@ -457,6 +469,7 @@ struct plist_item *recv_item (int sock)
 			if (item->title_tags)
 				free (item->title_tags);
 			free (item);
+			return NULL;
 		}
 
 		if (!get_time(sock, &item->mtime)) {
@@ -465,9 +478,9 @@ struct plist_item *recv_item (int sock)
 				free (item->title_tags);
 			free (item->file);
 			tags_free (item->tags);
+			free (item);
 			return NULL;
 		}
-
 	}
 
 	return item;
@@ -592,7 +605,7 @@ void free_event_data (const int type, void *data)
 	else if (type == EV_FILE_TAGS)
 		free_tag_ev_data ((struct tag_ev_response *)data);
 	else if (type == EV_PLIST_DEL || type == EV_STATUS_MSG
-			|| type == EV_QUEUE_DEL)
+			|| type == EV_SRV_ERROR || type == EV_QUEUE_DEL)
 		free (data);
 	else if (type == EV_PLIST_MOVE || type == EV_QUEUE_MOVE)
 		free_move_ev_data ((struct move_ev_data *)data);
@@ -661,6 +674,7 @@ static struct packet_buf *make_event_packet (const struct event *e)
 
 	if (e->type == EV_PLIST_DEL
 			|| e->type == EV_QUEUE_DEL
+			|| e->type == EV_SRV_ERROR
 			|| e->type == EV_STATUS_MSG) {
 		assert (e->data != NULL);
 		packet_buf_add_str (b, e->data);
@@ -693,37 +707,47 @@ static struct packet_buf *make_event_packet (const struct event *e)
 	return b;
 }
 
-/* Send the first event from the queue an remove it on success.  If the
+/* Send the first event from the queue and remove it on success.  If the
  * operation would block return NB_IO_BLOCK.  Return NB_IO_ERR on error
  * or NB_IO_OK on success. */
 enum noblock_io_status event_send_noblock (int sock, struct event_queue *q)
 {
 	ssize_t res;
+	char *err;
 	struct packet_buf *b;
+	enum noblock_io_status result;
 
 	assert (q != NULL);
 	assert (!event_queue_empty(q));
 
-	/* We must do it in one send() call to be able to handle blocking. */
 	b = make_event_packet (event_get_first(q));
-	res = send (sock, b->buf, b->len, MSG_DONTWAIT);
-	packet_buf_free (b);
 
-	if (res > 0) {
+	/* We must do it in one send() call to be able to handle blocking. */
+	nonblocking (send, res, sock, b->buf, b->len);
+
+	if (res == (ssize_t)b->len) {
 		struct event *e;
 
 		e = event_get_first (q);
 		free_event_data (e->type, e->data);
 		event_pop (q);
 
-		return NB_IO_OK;
-	}
-	else if (errno == EAGAIN) {
-		logit ("Sending event would block");
-		return NB_IO_BLOCK;
+		result = NB_IO_OK;
+		goto exit;
 	}
 
-	/* Error */
-	logit ("Error when sending event: %s", strerror(errno));
-	return NB_IO_ERR;
+	if (res < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+		logit ("Sending event would block");
+		result = NB_IO_BLOCK;
+		goto exit;
+	}
+
+	err = xstrerror (errno);
+	logit ("send()ing event failed (%zd): %s", res, err);
+	free (err);
+	result = NB_IO_ERR;
+
+exit:
+	packet_buf_free (b);
+	return result;
 }
