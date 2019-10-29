@@ -43,6 +43,8 @@
 #include "files.h"
 #include "rcc.h"
 
+#include "mpris.h"
+
 static int mocp_argc;
 static const char **mocp_argv;
 static int popt_next_val = 1;
@@ -159,7 +161,9 @@ static void start_moc (const struct parameters *params, lists_t_strs *args)
 	if (params->foreground) {
 		set_me_server ();
 		server_init (params->debug, params->foreground);
-		server_loop ();
+		mpris_init();
+        server_loop ();
+        mpris_quit();
 		return;
 	}
 
@@ -188,7 +192,9 @@ static void start_moc (const struct parameters *params, lists_t_strs *args)
 				fatal ("write() to notify pipe failed: %s", xstrerror (errno));
 			close (notify_pipe[0]);
 			close (notify_pipe[1]);
+            mpris_init();
 			server_loop ();
+            mpris_quit();
 			options_free ();
 			decoder_cleanup ();
 			io_cleanup ();

@@ -11,6 +11,8 @@ mocp_SOURCES = log.c \
 	       server.c \
 	       server.h \
 	       main.c \
+		   mpris.c \
+		   mpris_gc.c \
 	       common.c \
 	       common.h \
 	       compiler.h \

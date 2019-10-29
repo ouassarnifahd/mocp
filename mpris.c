@@ -231,6 +231,6 @@ void mpris_handle_event()
     while(g_main_context_iteration(main_context, FALSE));
 }
 
-void mpris_quit()
+volatile void mpris_quit()
 {
 }
