@@ -82,6 +82,7 @@ EXTRA_mocp_SOURCES = \
 		     jack.c \
 		     jack.h
 man_MANS = mocp.1
+mocp_CFLAGS = @EXTRA_CFLAGS@
 mocp_LDADD = @EXTRA_OBJS@ -lltdl -lm
 mocp_DEPENDENCIES = @EXTRA_OBJS@
 mocp_LDFLAGS = @EXTRA_LIBS@ $(RCC_LIBS) -export-dynamic

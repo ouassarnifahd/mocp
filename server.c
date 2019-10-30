@@ -47,6 +47,7 @@
 #include "files.h"
 #include "softmixer.h"
 #include "equalizer.h"
+#include "mpris.h"
 
 #define SERVER_LOG	"mocp_server_log"
 #define PID_FILE	"pid"
@@ -93,6 +94,11 @@ static struct {
 static struct tags_cache *tags_cache;
 
 extern char **environ;
+
+void set_server_quit()
+{
+    server_quit = 1;
+}
 
 static void write_pid_file ()
 {
@@ -1739,14 +1745,20 @@ void server_loop ()
 		FD_SET (server_sock, &fds_read);
 		FD_SET (wake_up_pipe[0], &fds_read);
 		add_clients_fds (&fds_read, &fds_write);
+        
+        struct timeval tv;
+        tv.tv_sec = 0;
+        tv.tv_usec = 100*1000;
 
 		res = 0;
 		if (!server_quit)
 			res = select (max_fd(server_sock)+1, &fds_read,
-					&fds_write, NULL, NULL);
+					&fds_write, NULL, &tv);
 
 		if (res == -1 && errno != EINTR && !server_quit)
 			fatal ("select() failed: %s", xstrerror (errno));
+
+        mpris_handle_event();
 
 		if (!server_quit && res >= 0) {
 			if (FD_ISSET(server_sock, &fds_read)) {
